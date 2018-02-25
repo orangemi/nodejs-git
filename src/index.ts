@@ -50,11 +50,21 @@ export class Repo {
   }
 
   async loadBranches () {
-    // TODO
+    const prefix = 'refs/heads'
+    const refs = await this.listRefs(prefix)
+    return refs.map(ref => ref.substring(prefix.length + 1))
+    // TODO: need add commit
   }
 
   async loadTags () {
-    // TODO
+    const prefix = 'refs/tags'
+    const refs = await this.listRefs(prefix)
+    return refs.map(ref => ref.substring(prefix.length + 1))
+    // TODO: need add commit
+  }
+
+  async listRefs (prefix: string = 'refs/heads') {
+    return listDeepFileList(this.repoPath, prefix)
   }
 
   async loadBlob (hash: string, options: LoadOptions = {}) {
@@ -137,17 +147,16 @@ export class Repo {
   }
 
   async loadRef (hash: string, options: LoadOptions = {}) {
+    const objectPath = path.resolve(this.repoPath, hash)
+    const content = await fs.readFile(objectPath, {encoding: 'utf8'})
+
     if (hash === 'HEAD') {
-      const objectPath = path.resolve(this.repoPath, hash)
-      const head = await fs.readFile(objectPath, {encoding: 'utf8'})
-      if (!REF_REGEX.test(head)) throw new Error('HEAD file corrept')
-      const ref = REF_REGEX.exec(head)[1]
+      if (!REF_REGEX.test(content)) throw new Error('HEAD file corrept')
+      const ref = REF_REGEX.exec(content)[1]
       return this.loadRef(ref.trim(), options)
     } else {
-      const objectPath = path.resolve(this.repoPath, hash)
-      const sha = await fs.readFile(objectPath, {encoding: 'utf8'})
-      if (!isHash(sha.trim())) throw new Error(sha + 'is not hash')
-      return this.loadCommit(sha.trim(), options)
+      if (!isHash(content.trim())) throw new Error(content + 'is not hash')
+      return this.loadCommit(content.trim(), options)
     }
   }
 
@@ -251,5 +260,22 @@ function parseAuthor (string: string) {
     date: new Date(1000 * parseInt(string.substring(rtIndex + 2, spaceIndex))),
     timezone: string.substring(spaceIndex + 1),
   }
+  return result
+}
+
+async function listDeepFileList (root: string, prefix: string): Promise<Array<string>> {
+  console.log('listDeepFileList', root, prefix)
+  const result = []
+  const files = await fs.readdir(path.resolve(root, prefix))
+  files.filter(file => /^\./.test(file))
+  const ffs = await Promise.all(files.map(async (file) => {
+    file = prefix + '/' + file
+    const fsStat = await fs.stat(path.resolve(root, file))
+    // console.log('listDeepFileList2', root, file)
+    if (fsStat.isFile()) return [file]
+    if (fsStat.isDirectory()) return listDeepFileList(root, file)
+    throw new Error('unknown ref ' + file)
+  }))
+  ffs.forEach(files => files.forEach(file => result.push(file)))
   return result
 }
