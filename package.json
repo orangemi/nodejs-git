@@ -1,0 +1,21 @@
+{
+  "name": "nodejs-git",
+  "version": "0.1.0",
+  "description": "",
+  "main": "lib/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Orange Mi",
+  "license": "MIT",
+  "dependencies": {
+    "mz": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/mz": "0.0.32",
+    "@types/node": "^9.4.6",
+    "mocha": "^5.0.1",
+    "ts-node": "^4.1.0",
+    "typescript": "^2.7.1"
+  }
+}

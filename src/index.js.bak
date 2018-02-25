@@ -1,0 +1,45 @@
+const fs = require('fs')
+const path = require('path')
+const stream = require('stream')
+const { Transform } = stream
+
+module.exports = Repo
+
+function Repo (repoPath) {
+  this.repoPath = repoPath
+}
+
+/**
+ * 
+ * @param {string} type type
+ * @param {string} hash hash
+ */
+Repo.prototype.load = async function (type, hash) {
+  if (isHash(hash)) {
+    const objectPath = path.resolve(this.repoPath, 'objects', hash.substring(0, 2), hash.substring(2))
+    const contentStream = fs.createReadStream(objectPath)
+    const chunk = await readOnce(contentStream)
+    chunk
+  }
+}
+
+Repo.createRepo = (repoPath) => {
+  return new Repo(repoPath)
+}
+
+/**
+ * @param {ReadStream} contentStream stream
+ */
+function readOnce (contentStream) {
+  return new Promise((resolve, reject) => {
+    contentStream.once('error', reject)
+    contentStream.once('data', (chunk) => {
+      contentStream.removeListener('error', reject)
+    })
+  })
+}
+
+const HASH_REGEX = /^[0-9a-f]{40}$/
+function isHash (string) {
+  return HASH_REGEX.test(string)
+}
