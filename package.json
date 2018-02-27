@@ -9,7 +9,8 @@
   "author": "Orange Mi",
   "license": "MIT",
   "dependencies": {
-    "mz": "^2.7.0"
+    "mz": "^2.7.0",
+    "promise-limit": "^2.5.0"
   },
   "devDependencies": {
     "@types/mz": "0.0.32",

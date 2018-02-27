@@ -22,13 +22,20 @@ async function main () {
   console.log('------------')
   console.log(blob.buffer.toString())
   
-  const branches = await repo.loadBranches()
+  const branches = await repo.listBranches()
   console.log('------------')
   console.log('branches')
   console.log('------------')
   console.log(branches)
 
-  const tags = await repo.loadTags()
+  const masterHash = branches.master
+  const commit2 = await repo.loadCommit(masterHash)
+  console.log('------------')
+  console.log('master', masterHash)
+  console.log('------------')
+  console.log(commit2)
+
+  const tags = await repo.listTags()
   console.log('------------')
   console.log('tags')
   console.log('------------')

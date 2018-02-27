@@ -1,4 +1,5 @@
 import * as fs from 'mz/fs'
+import * as limitFactory from 'promise-limit'
 import * as zlib from 'zlib'
 import * as path from 'path'
 import { PassThrough, Transform, Readable } from 'stream'
@@ -9,7 +10,7 @@ interface LoadOptions {
 
 interface LoadResult {
   type: string,
-  hash: string,
+  hash: hash,
   length: number,
   stream: Readable,
   buffer?: Buffer,
@@ -17,7 +18,7 @@ interface LoadResult {
 
 interface CommitResult {
   type: string,
-  hash: string,
+  hash: hash,
   tree: string,
   committer: Author,
   author: Author,
@@ -40,8 +41,11 @@ interface TreeResult extends LoadResult {
 interface TreeNode {
   mode: number,
   name: string,
-  hash: string,
+  hash: hash,
 }
+
+type hash = string
+type HashMap = {[key: string]: hash}
 
 export class Repo {
   repoPath: string
@@ -49,29 +53,31 @@ export class Repo {
     this.repoPath = repoPath
   }
 
-  async loadBranches () {
+  async listBranches () {
     const prefix = 'refs/heads'
-    const refs = await this.listRefs(prefix)
-    return refs.map(ref => ref.substring(prefix.length + 1))
-    // TODO: need add commit
+    const hashMap = await this.listRefs(prefix)
+    const result: HashMap = {}
+    Object.keys(hashMap).forEach(key => result[key.substring(prefix.length + 1)] = hashMap[key])
+    return result
   }
 
-  async loadTags () {
+  async listTags () {
     const prefix = 'refs/tags'
-    const refs = await this.listRefs(prefix)
-    return refs.map(ref => ref.substring(prefix.length + 1))
-    // TODO: need add commit
+    const hashMap = await this.listRefs(prefix)
+    const result: HashMap = {}
+    Object.keys(hashMap).forEach(key => result[key.substring(prefix.length + 1)] = hashMap[key])
+    return result
   }
 
   async listRefs (prefix: string = 'refs/heads') {
     return listDeepFileList(this.repoPath, prefix)
   }
 
-  async loadBlob (hash: string, options: LoadOptions = {}) {
+  async loadBlob (hash: hash, options: LoadOptions = {}) {
     return this.loadObject(hash, options)
   }
 
-  async loadCommit (hash: string, options: LoadOptions = {}): Promise<CommitResult> {
+  async loadCommit (hash: hash, options: LoadOptions = {}): Promise<CommitResult> {
     if (!isHash(hash)) return this.loadRef(hash, options)
     const loadResult = await this.loadObject(hash, {loadAll: true})
     if (loadResult.type !== 'commit') throw new Error(hash + ' is not commit')
@@ -102,7 +108,7 @@ export class Repo {
     return result
   }
 
-  async loadTree (hash: string, options: LoadOptions = {}) {
+  async loadTree (hash: hash, options: LoadOptions = {}) {
     if (!isHash(hash)) throw new Error(hash + ' is not hash')
     const loadResult = await this.loadObject(hash)
     if (loadResult.type !== 'tree') throw new Error(hash + ' is not tree')
@@ -146,7 +152,15 @@ export class Repo {
     return result
   }
 
-  async loadRef (hash: string, options: LoadOptions = {}) {
+  async loadBranch (branch: string) {
+    return this.loadRef('refs/heads/' + branch)
+  }
+
+  async loadTag (tag: string) {
+    return this.loadRef('refs/tags/' + tag)
+  }
+
+  async loadRef (hash: hash, options: LoadOptions = {}): Promise<CommitResult> {
     const objectPath = path.resolve(this.repoPath, hash)
     const content = await fs.readFile(objectPath, {encoding: 'utf8'})
 
@@ -160,7 +174,7 @@ export class Repo {
     }
   }
 
-  async loadObject (hash: string, options: LoadOptions = {}) {
+  async loadObject (hash: hash, options: LoadOptions = {}) {
     if (!isHash(hash)) throw new Error(hash + ' is not hash')
     const objectPath = path.resolve(this.repoPath, 'objects', hash.substring(0, 2), hash.substring(2))
     const contentStream = zlib.createInflate()
@@ -263,19 +277,23 @@ function parseAuthor (string: string) {
   return result
 }
 
-async function listDeepFileList (root: string, prefix: string): Promise<Array<string>> {
-  console.log('listDeepFileList', root, prefix)
-  const result = []
+async function listDeepFileList (root: string, prefix: string): Promise<HashMap> {
   const files = await fs.readdir(path.resolve(root, prefix))
   files.filter(file => /^\./.test(file))
-  const ffs = await Promise.all(files.map(async (file) => {
+  const limiter = limitFactory(5)
+  const hashMaps: Array<HashMap> = await Promise.all(files.map(file => limiter(async () => {
+    const result: HashMap = {}
     file = prefix + '/' + file
     const fsStat = await fs.stat(path.resolve(root, file))
-    // console.log('listDeepFileList2', root, file)
-    if (fsStat.isFile()) return [file]
+    if (fsStat.isFile() && fsStat.size >= 40 && fsStat.size <= 41) {
+      const content = await fs.readFile(path.resolve(root, file))
+      const hash = content.toString().trim()
+      return <HashMap>{[file]: hash}
+    }
     if (fsStat.isDirectory()) return listDeepFileList(root, file)
     throw new Error('unknown ref ' + file)
-  }))
-  ffs.forEach(files => files.forEach(file => result.push(file)))
+  })))
+  const result: HashMap = {}
+  hashMaps.forEach(hashMap => Object.assign(result, hashMap)) // files.forEach(file => result.push(file)))
   return result
 }
