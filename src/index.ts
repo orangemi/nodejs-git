@@ -4,11 +4,11 @@ import * as zlib from 'zlib'
 import * as path from 'path'
 import { PassThrough, Transform, Readable } from 'stream'
 
-interface LoadOptions {
+export interface LoadOptions {
   loadAll?: Boolean,
 }
 
-interface LoadResult {
+export interface LoadResult {
   type: string,
   hash: hash,
   length: number,
@@ -16,7 +16,7 @@ interface LoadResult {
   buffer?: Buffer,
 }
 
-interface CommitResult {
+export interface CommitResult {
   type: string,
   hash: hash,
   tree: string,
@@ -26,7 +26,7 @@ interface CommitResult {
   parent: Array<string>,
 }
 
-interface Author {
+export interface Author {
   name: string,
   email: string,
   emails?: Array<string>,
@@ -34,18 +34,18 @@ interface Author {
   timezone?: string,
 }
 
-interface TreeResult extends LoadResult {
+export interface TreeResult extends LoadResult {
   nodes?: Array<TreeNode>,
 }
 
-interface TreeNode {
+export interface TreeNode {
   mode: number,
   name: string,
   hash: hash,
 }
 
-type hash = string
-type HashMap = {[key: string]: hash}
+export type hash = string
+export type HashMap = {[key: string]: hash}
 
 export class Repo {
   repoPath: string
