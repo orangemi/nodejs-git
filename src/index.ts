@@ -45,7 +45,6 @@ export interface TreeNode {
 }
 
 export type hash = string
-export type HashMap = {[key: string]: hash}
 
 export class Repo {
   repoPath: string
@@ -55,18 +54,14 @@ export class Repo {
 
   async listBranches () {
     const prefix = 'refs/heads'
-    const hashMap = await this.listRefs(prefix)
-    const result: HashMap = {}
-    Object.keys(hashMap).forEach(key => result[key.substring(prefix.length + 1)] = hashMap[key])
-    return result
+    const refs = await this.listRefs(prefix)
+    return refs.map(ref => ref.substring(prefix.length + 1))
   }
 
   async listTags () {
     const prefix = 'refs/tags'
-    const hashMap = await this.listRefs(prefix)
-    const result: HashMap = {}
-    Object.keys(hashMap).forEach(key => result[key.substring(prefix.length + 1)] = hashMap[key])
-    return result
+    const refs = await this.listRefs(prefix)
+    return refs.map(ref => ref.substring(prefix.length + 1))
   }
 
   async listRefs (prefix: string = 'refs/heads') {
@@ -91,6 +86,7 @@ export class Repo {
       message: '',
       parent: []
     }
+
     while (buffer[0] !== 0x0a) {
       const spaceIndex = buffer.indexOf(0x20)
       const lfIndex = buffer.indexOf(0x0a)
@@ -114,7 +110,6 @@ export class Repo {
     if (loadResult.type !== 'tree') throw new Error(hash + ' is not tree')
     let left = Buffer.alloc(0)
     const transform = new Transform({
-      // writableObjectMode: true,
       readableObjectMode: true,
       transform: (chunk: Buffer, encoding: string, callback: Function) => {
         left = Buffer.concat([left, chunk])
@@ -215,7 +210,6 @@ export class Repo {
 
     return result
   }
-  // }
 }
 
 function readOnce (contentStream: Readable): Promise<Buffer> {
@@ -277,23 +271,22 @@ function parseAuthor (string: string) {
   return result
 }
 
-async function listDeepFileList (root: string, prefix: string): Promise<HashMap> {
+async function listDeepFileList (root: string, prefix: string): Promise<Array<string>> {
   const files = await fs.readdir(path.resolve(root, prefix))
   files.filter(file => /^\./.test(file))
   const limiter = limitFactory(5)
-  const hashMaps: Array<HashMap> = await Promise.all(files.map(file => limiter(async () => {
-    const result: HashMap = {}
+  const refss: Array<Array<string>> = await Promise.all(files.map(file => limiter(async () => {
     file = prefix + '/' + file
     const fsStat = await fs.stat(path.resolve(root, file))
     if (fsStat.isFile() && fsStat.size >= 40 && fsStat.size <= 41) {
       const content = await fs.readFile(path.resolve(root, file))
       const hash = content.toString().trim()
-      return <HashMap>{[file]: hash}
+      return [file]
     }
     if (fsStat.isDirectory()) return listDeepFileList(root, file)
     throw new Error('unknown ref ' + file)
   })))
-  const result: HashMap = {}
-  hashMaps.forEach(hashMap => Object.assign(result, hashMap)) // files.forEach(file => result.push(file)))
+  const result: Array<string> = []
+  refss.forEach(refs => refs.forEach(ref => result.push(ref)))
   return result
 }
