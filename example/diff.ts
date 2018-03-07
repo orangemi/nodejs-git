@@ -6,12 +6,11 @@ import * as colors from 'colors/safe'
 const repo = new Repo('./fixtures/repo')
 console.log(repo)
 async function main () {
-  let commit = await repo.loadCommit('HEAD')
+  let commit = await repo.loadHead()
   while (commit.parent.length) {
     console.log('----------')
     console.log('commit:', commit.hash)
     console.log(commit.message)
-    // console.log('----------')
     let parent = await repo.loadCommit(commit.parent[0])
     const diffs = await repo.diffTree(commit.tree, parent.tree)
 

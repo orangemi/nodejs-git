@@ -152,7 +152,7 @@ export class Repo {
   }
 
   async loadCommit (hash: hash, options: LoadOptions = {}): Promise<CommitResult> {
-    if (!isHash(hash)) return this.loadRef(hash, options)
+    if (!isHash(hash)) throw new Error('hash is not hash')
     const loadResult = await this.loadObject(hash, {loadAll: true})
     if (loadResult.type !== 'commit') throw new Error(hash + ' is not commit')
     let buffer = loadResult.buffer
@@ -225,25 +225,35 @@ export class Repo {
   }
 
   async loadBranch (branch: string) {
-    return this.loadRef('refs/heads/' + branch)
+    const hash = await this.loadFileHash('refs/heads/' + branch)
+    return this.loadCommit(hash)
+  }
+
+  async loadHead (options?: LoadOptions) {
+    const ref = await this.loadRef('HEAD')
+    const hash = await this.loadFileHash(ref)
+    return this.loadCommit(hash, options)
+  }
+
+  async loadRef (filepath: string): Promise<hash> {
+    const objectPath = path.resolve(this.repoPath, filepath)
+    const content = await fs.readFile(objectPath, {encoding: 'utf8'})
+    const ref = REF_REGEX.exec(content)[1]
+    return ref.trim()
   }
 
   async loadTag (tag: string) {
-    return this.loadRef('refs/tags/' + tag)
+    const hash = await this.loadFileHash('refs/tags/' + tag)
+    const loadResult = await this.loadObject(hash, {loadAll: true})
+    console.log('----', loadResult.buffer.toString())
+    // TODO: add TagResult Output
   }
 
-  async loadRef (hash: hash, options: LoadOptions = {}): Promise<CommitResult> {
-    const objectPath = path.resolve(this.repoPath, hash)
+  async loadFileHash (filepath: string): Promise<hash> {
+    const objectPath = path.resolve(this.repoPath, filepath)
     const content = await fs.readFile(objectPath, {encoding: 'utf8'})
-
-    if (hash === 'HEAD') {
-      if (!REF_REGEX.test(content)) throw new Error('HEAD file corrept')
-      const ref = REF_REGEX.exec(content)[1]
-      return this.loadRef(ref.trim(), options)
-    } else {
-      if (!isHash(content.trim())) throw new Error(content + 'is not hash')
-      return this.loadCommit(content.trim(), options)
-    }
+    if (!isHash(content.trim())) throw new Error('content is not hash')
+    return content.trim()
   }
 
   async loadObject (hash: hash, options: LoadOptions = {}) {
@@ -330,7 +340,7 @@ function bufferGetDecimal (buffer: Buffer, start, end: number) {
 }
 
 const REF_REGEX = /^ref: *(.*)/
-const HASH_REGEX = /^[0-9a-f]{40}$/
+const HASH_REGEX = /^[0-9a-fA-F]{40}$/
 function isHash (string: string) {
   return HASH_REGEX.test(string)
 }

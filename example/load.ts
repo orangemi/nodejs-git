@@ -3,7 +3,7 @@ import {Repo, TreeNode} from '../src'
 const repo = new Repo('./fixtures/repo')
 console.log(repo)
 async function main () {
-  let commit = await repo.loadCommit('HEAD')
+  let commit = await repo.loadHead()
   console.log('------------')
   console.log('HEAD COMMIT')
   console.log(commit.hash)
@@ -39,6 +39,7 @@ async function main () {
   console.log('tags')
   console.log(tags)
 
+  console.log(await repo.loadTag(tags[4]))
 }
 
 main().catch(err => {
