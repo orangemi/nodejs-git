@@ -3,6 +3,24 @@ import * as limitFactory from 'promise-limit'
 import * as zlib from 'zlib'
 import * as path from 'path'
 import { PassThrough, Transform, Readable } from 'stream'
+import { readUntil } from './readUntil'
+
+const LF = 0x0a
+const SPACE = 0x20
+const FILE_MODE = {
+  FILE: 0x4000,
+  DIR: 0x8000
+}
+
+export interface DiffResult {
+  // left: TreeNode,
+  // right: TreeNode,
+  name: string,
+  leftMode: number,
+  rightMode: number,
+  leftHash: string,
+  rightHash: string,
+}
 
 export interface LoadOptions {
   loadAll?: Boolean,
@@ -68,6 +86,63 @@ export class Repo {
     return listDeepFileList(this.repoPath, prefix)
   }
 
+  async diffTree (hash1: hash, hash2: hash, options = {recursive: true, prefix: ''}) {
+    const prefix = options.prefix || ''
+    let result: Array<DiffResult> = []
+    let nodes1: Array<TreeNode> = []
+    let nodes2: Array<TreeNode> = []
+    if (hash1) {
+      const tree = await this.loadTree(hash1, {loadAll: true})
+      nodes1 = nodes1.concat(tree.nodes)
+    }
+    if (hash2) {
+      const tree = await this.loadTree(hash2, {loadAll: true})
+      nodes2 = nodes2.concat(tree.nodes)
+    }
+  
+    await Promise.all(nodes1.map(async (node1) => {
+      const node2 = findAndPop(node1, nodes2)
+      const diff = <DiffResult>{
+        name: prefix + node1.name,
+        leftMode: node1.mode,
+        leftHash: node1.hash,
+        rightMode: node2 ? node2.mode : 0,
+        rightHash: node2 ? node2.hash : ''
+      }
+      // if (!diff.right) diff.right = <TreeNode>{mode: 0, hash: '', name: ''}
+      if (diff.leftHash === diff.rightHash) return // ignore same hash
+  
+      result.push(diff)
+      if (options.recursive) {
+        let leftHash = diff.leftHash
+        let rightHash = diff.rightHash
+        if (diff.leftMode & FILE_MODE.DIR) leftHash = ''
+        if (diff.rightMode & FILE_MODE.DIR) rightHash = ''
+        if (leftHash && rightHash) result.pop()
+        if (leftHash || rightHash) {
+          const subDiffs = await this.diffTree(leftHash, rightHash, Object.assign({}, options, {prefix: diff.name + '/'}))
+          result = result.concat(subDiffs)
+        }
+      }
+    }))
+  
+    await Promise.all(nodes2.map(async (node) => {
+      const diff = <DiffResult>{
+        leftMode: 0,
+        leftHash: '',
+        rightMode: node.mode,
+        rightHash: node.hash,
+      }
+      result.push(diff)
+      if (options.recursive && node.mode & FILE_MODE.DIR) {
+        const subDiffs = await this.diffTree('', node.hash, Object.assign({}, options, {prefix: diff.name + '/'}))
+        result = result.concat(subDiffs)
+      }
+    }))
+  
+    return result
+  }
+
   async loadBlob (hash: hash, options: LoadOptions = {}) {
     return this.loadObject(hash, options)
   }
@@ -87,9 +162,9 @@ export class Repo {
       parent: []
     }
 
-    while (buffer[0] !== 0x0a) {
-      const spaceIndex = buffer.indexOf(0x20)
-      const lfIndex = buffer.indexOf(0x0a)
+    while (buffer[0] !== LF) {
+      const spaceIndex = buffer.indexOf(SPACE)
+      const lfIndex = buffer.indexOf(LF)
       const key = buffer.slice(0, spaceIndex).toString()
       const value = buffer.slice(spaceIndex + 1, lfIndex).toString()
       switch (key) {
@@ -114,7 +189,7 @@ export class Repo {
       transform: (chunk: Buffer, encoding: string, callback: Function) => {
         left = Buffer.concat([left, chunk])
         while (true) {
-          const spaceIndex = left.indexOf(0x20)
+          const spaceIndex = left.indexOf(SPACE)
           const nilIndex = left.indexOf(0x00)
           if (nilIndex === -1 || left.length - nilIndex < 20) break
           const filemode = bufferGetOct(left, 0, spaceIndex)
@@ -125,7 +200,6 @@ export class Repo {
             name: filename,
             hash: sha,
           })
-
           left = left.slice(nilIndex + 21)
         }
         callback()
@@ -133,7 +207,6 @@ export class Repo {
     })
     const sourceStream = loadResult.stream
     sourceStream.pipe(transform)
-
     const result: TreeResult = loadResult
     result.stream = transform
 
@@ -175,58 +248,58 @@ export class Repo {
     const contentStream = zlib.createInflate()
     const fileStream = fs.createReadStream(objectPath)
     fileStream.pipe(contentStream)
-    let chunk = await readOnce(contentStream)
-    while (!~chunk.indexOf(0x00)) {
-      const newChunk = await readOnce(contentStream)
-      if (!newChunk) throw new Error('not find 0x00')
-      chunk = Buffer.concat([chunk, newChunk])
-    }
+    let chunk = await readUntil(contentStream, Buffer.alloc(1, 0x00))
+    // let chunk = await readOnce(contentStream)
+    // while (!~chunk.indexOf(0x00)) {
+    //   const newChunk = await readOnce(contentStream)
+    //   if (!newChunk) throw new Error('not find 0x00')
+    //   chunk = Buffer.concat([chunk, newChunk])
+    // }
 
-    const spaceIndex = chunk.indexOf(0x20)
+    const spaceIndex = chunk.indexOf(SPACE)
     const type = bufferGetAscii(chunk, 0, spaceIndex)
 
     const nilIndex = chunk.indexOf(0x00, spaceIndex)
     const length = bufferGetDecimal(chunk, spaceIndex + 1, nilIndex)
 
-    const left = chunk.slice(nilIndex + 1)
-    const streaming = new PassThrough()
-    streaming.write(left)
-    contentStream.pipe(streaming)
+    // const left = chunk.slice(nilIndex + 1)
+    // const streaming = new PassThrough()
+    // streaming.write(left)
+    // contentStream.pipe(streaming)
 
     const result: LoadResult = {
       type: type,
       hash: hash,
       length: length,
-      stream: streaming,
+      stream: contentStream,
     }
 
     if (options.loadAll) {
       result.buffer = Buffer.alloc(0)
-      streaming.on('data', (chunk: Buffer) => {
+      contentStream.on('data', (chunk: Buffer) => {
         result.buffer = Buffer.concat([result.buffer, chunk])
       })
-      await new Promise(resolve => streaming.on('end', resolve))
+      await new Promise(resolve => contentStream.on('end', resolve))
     }
-
     return result
   }
 }
 
-function readOnce (contentStream: Readable): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    if (!contentStream.readable) return resolve(null)
-    function onRead (chunk: Buffer) {
-      contentStream.removeListener('error', onError)
-      resolve(chunk)
-    }
-    function onError (err: Error) {
-      contentStream.removeListener('data', onRead)
-      reject(err)
-    }
-    contentStream.once('data', onRead)
-    contentStream.once('error', onError)
-  })
-}
+// function readOnce (contentStream: Readable): Promise<Buffer> {
+//   return new Promise((resolve, reject) => {
+//     if (!contentStream.readable) return resolve(null)
+//     function onRead (chunk: Buffer) {
+//       contentStream.removeListener('error', onError)
+//       resolve(chunk)
+//     }
+//     function onError (err: Error) {
+//       contentStream.removeListener('data', onRead)
+//       reject(err)
+//     }
+//     contentStream.once('data', onRead)
+//     contentStream.once('error', onError)
+//   })
+// }
 
 function bufferGetAscii (buffer: Buffer, start, end: number) {
   let string = ''
@@ -289,4 +362,9 @@ async function listDeepFileList (root: string, prefix: string): Promise<Array<st
   const result: Array<string> = []
   refss.forEach(refs => refs.forEach(ref => result.push(ref)))
   return result
+}
+
+function findAndPop (source: TreeNode, nodes: Array<TreeNode>): TreeNode {
+  const index = nodes.findIndex(node => node.name === source.name)
+  if (index >= 0) return nodes.splice(index, 1)[0]
 }
