@@ -8,14 +8,14 @@ import { readUntil } from './readUntil'
 const LF = 0x0a
 const SPACE = 0x20
 const FILE_MODE = {
-  FILE: 0x4000,
-  DIR: 0x8000
+  FILE: 0x8000,
+  DIR: 0x4000
 }
 
 export interface DiffResult {
   // left: TreeNode,
   // right: TreeNode,
-  name: string,
+  path: string,
   leftMode: number,
   rightMode: number,
   leftHash: string,
@@ -103,7 +103,7 @@ export class Repo {
     await Promise.all(nodes1.map(async (node1) => {
       const node2 = findAndPop(node1, nodes2)
       const diff = <DiffResult>{
-        name: prefix + node1.name,
+        path: prefix + node1.name,
         leftMode: node1.mode,
         leftHash: node1.hash,
         rightMode: node2 ? node2.mode : 0,
@@ -116,11 +116,13 @@ export class Repo {
       if (options.recursive) {
         let leftHash = diff.leftHash
         let rightHash = diff.rightHash
-        if (diff.leftMode & FILE_MODE.DIR) leftHash = ''
-        if (diff.rightMode & FILE_MODE.DIR) rightHash = ''
-        if (leftHash && rightHash) result.pop()
+        if (!(diff.leftMode & FILE_MODE.DIR)) leftHash = ''
+        if (!(diff.rightMode & FILE_MODE.DIR)) rightHash = ''
+        if (diff.leftMode & FILE_MODE.DIR) { diff.leftMode = 0; diff.leftHash = ''}
+        if (diff.rightMode & FILE_MODE.DIR) { diff.rightMode = 0; diff.rightHash = ''}
+        if (!(diff.leftMode & FILE_MODE.FILE) && !(diff.rightMode & FILE_MODE.FILE)) result.pop()
         if (leftHash || rightHash) {
-          const subDiffs = await this.diffTree(leftHash, rightHash, Object.assign({}, options, {prefix: diff.name + '/'}))
+          const subDiffs = await this.diffTree(leftHash, rightHash, Object.assign({}, options, {prefix: diff.path + '/'}))
           result = result.concat(subDiffs)
         }
       }
@@ -128,15 +130,17 @@ export class Repo {
   
     await Promise.all(nodes2.map(async (node) => {
       const diff = <DiffResult>{
+        path: prefix + node.name,
         leftMode: 0,
         leftHash: '',
         rightMode: node.mode,
         rightHash: node.hash,
       }
-      result.push(diff)
-      if (options.recursive && node.mode & FILE_MODE.DIR) {
-        const subDiffs = await this.diffTree('', node.hash, Object.assign({}, options, {prefix: diff.name + '/'}))
+      if (options.recursive && (node.mode & FILE_MODE.DIR)) {
+        const subDiffs = await this.diffTree('', node.hash, Object.assign({}, options, {prefix: diff.path + '/'}))
         result = result.concat(subDiffs)
+      } else {
+        result.push(diff)
       }
     }))
   
