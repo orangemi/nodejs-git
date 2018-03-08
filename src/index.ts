@@ -3,7 +3,7 @@ import * as limitFactory from 'promise-limit'
 import * as zlib from 'zlib'
 import * as path from 'path'
 import { PassThrough, Transform, Readable } from 'stream'
-import { readUntil } from './readUntil'
+import { readUntil, readLimit, readSkip } from './streamUtil'
 
 const LF = 0x0a
 const SPACE = 0x20
@@ -11,6 +11,8 @@ const FILE_MODE = {
   FILE: 0x8000,
   DIR: 0x4000
 }
+
+const PACK_IDX_2_FANOUT0 = 0xff744f63
 
 export interface DiffResult {
   // left: TreeNode,
@@ -254,6 +256,56 @@ export class Repo {
     const content = await fs.readFile(objectPath, {encoding: 'utf8'})
     if (!isHash(content.trim())) throw new Error('content is not hash')
     return content.trim()
+  }
+
+  async findObjectInPack (hash: hash, packHash: hash) {
+    const hashBuffer = Buffer.from(hash, 'hex')
+    const hashFanIdx = hashBuffer.readIntBE(0, 1)
+    const idxFilepath = path.resolve(this.repoPath, 'objects', 'pack', `pack-${packHash}.idx`)
+    const packFilepath = path.resolve(this.repoPath, 'objects', 'pack', `pack-${packHash}.pack`)
+    // const contentStream = zlib.createInflate()
+    const idxStream = fs.createReadStream(idxFilepath)
+    const packStream = fs.createReadStream(packFilepath)
+    const idxBuffer = await fs.readFile(idxFilepath)
+
+    // buffer mode
+    let offset = 0
+    let skip = 0
+    // let offset2 = 0
+    const headBuffer = await readLimit(idxStream, 256 * 4 + 8)
+    if (headBuffer.readUIntBE(0, 4) === PACK_IDX_2_FANOUT0, headBuffer.readUIntBE(4, 4) === 2) offset += 8
+    else idxStream.unshift(headBuffer.slice(offset + 255 * 4))
+    const totalObjects = headBuffer.readUIntBE(offset + 255 * 4, 4)
+    const fanoutStart = hashFanIdx > 0 ? headBuffer.readUIntBE(offset + (hashFanIdx - 1) * 4, 4) : 0
+    const fanoutEnd = headBuffer.readUIntBE(offset + hashFanIdx * 4, 4)
+    // offset += 1024
+    skip = fanoutStart * 20
+    const tmpBuffer = await readUntil(idxStream, hashBuffer, {limit: 0, skip: skip})
+    const idx = fanoutStart + tmpBuffer.length / 20
+    if (idx < 0) return null
+
+    // left object hash bytes = (totalObjects - idx - 1) * 20
+    // crc32 bytes = totalObjects * 4
+    // offset bytes = idx * 4
+    skip = (totalObjects - idx - 1) * 20 + totalObjects * 4 + idx * 4
+    const packOffsetBuffer = await readLimit(idxStream, 4, {skip})
+    const packOffset = packOffsetBuffer.readUIntBE(0, 4)
+
+    // entry?
+
+    console.log({hash, fanoutStart, fanoutEnd, idx, packOffset, totalObjects})
+
+    const packHeaderBuffer = await readLimit(packStream, 12)
+    const packFileVersion = packHeaderBuffer.readUIntBE(4, 4)
+    const packObjects = packHeaderBuffer.readUIntBE(8, 4)
+    console.log({packHeaderBuffer, packFileVersion, packObjects})
+
+    skip = packOffset - 12
+    await readSkip(packStream, skip)
+    // const contentStream = zlib.createInflate()
+    // packStream.pipe(contentStream)
+    const ff = await readLimit(packStream, 100)
+    console.log(ff.toString())
   }
 
   async loadObject (hash: hash, options: LoadOptions = {}) {
