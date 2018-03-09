@@ -103,7 +103,6 @@ export function readLimit (
   })
 }
 
-
 export function readSkip (
   source: stream.Readable,
   skip: number): Promise<number> {
@@ -143,4 +142,19 @@ export function readSkip (
     }
 
   })
+}
+
+export function createLimitedStream (limit: number) {
+  let read = 0
+  const tunnel = new stream.Transform({
+    transform(chunk: Buffer, encoding: string, callback: Function) {
+      if (read < limit) {
+        this.push(chunk.slice(0, limit - read))
+        if (read + chunk.length >= limit) this.push(null)
+        read += chunk.length
+        callback()
+      }
+    }
+  })
+  return tunnel
 }

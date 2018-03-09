@@ -3,7 +3,7 @@ import * as limitFactory from 'promise-limit'
 import * as zlib from 'zlib'
 import * as path from 'path'
 import { PassThrough, Transform, Readable } from 'stream'
-import { readUntil, readLimit, readSkip } from './streamUtil'
+import { readUntil, readLimit, readSkip, createLimitedStream } from './streamUtil'
 
 const LF = 0x0a
 const SPACE = 0x20
@@ -247,7 +247,7 @@ export class Repo {
   async loadTag (tag: string) {
     const hash = await this.loadFileHash('refs/tags/' + tag)
     const loadResult = await this.loadObject(hash, {loadAll: true})
-    console.log('----', loadResult.buffer.toString())
+    // console.log('----', loadResult.buffer.toString())
     // TODO: add TagResult Output
   }
 
@@ -258,9 +258,24 @@ export class Repo {
     return content.trim()
   }
 
+  async listPack () {
+    const packDirPath = path.resolve(this.repoPath, 'objects', 'pack')
+    const files = await fs.readdir(packDirPath)
+    return files
+      .filter(file => /^pack-([a-f0-9]{40})\.idx$/.test(file))
+      .map(file => /^pack-([a-f0-9]{40})\.idx$/.exec(file)[1])
+  }
+
+  async findObjectInAllPack (hash: hash, options?: LoadOptions) {
+    const packs = await this.listPack()
+    const results = await Promise.all(packs.map(pack => this.findObjectInPack(hash, pack)))
+    const result = results.filter(result => result)[0]
+    return result
+  }
+
   async findObjectInPack (hash: hash, packHash: hash) {
     const hashBuffer = Buffer.from(hash, 'hex')
-    const hashFanIdx = hashBuffer.readIntBE(0, 1)
+    const hashFanIdx = hashBuffer.readUIntBE(0, 1)
     const idxFilepath = path.resolve(this.repoPath, 'objects', 'pack', `pack-${packHash}.idx`)
     const packFilepath = path.resolve(this.repoPath, 'objects', 'pack', `pack-${packHash}.pack`)
     // const contentStream = zlib.createInflate()
@@ -280,7 +295,7 @@ export class Repo {
     const fanoutEnd = headBuffer.readUIntBE(offset + hashFanIdx * 4, 4)
     // offset += 1024
     skip = fanoutStart * 20
-    const tmpBuffer = await readUntil(idxStream, hashBuffer, {limit: 0, skip: skip})
+    let tmpBuffer = await readUntil(idxStream, hashBuffer, {limit: 0, skip: skip})
     const idx = fanoutStart + tmpBuffer.length / 20
     if (idx < 0) return null
 
@@ -293,34 +308,53 @@ export class Repo {
 
     // entry?
 
-    console.log({hash, fanoutStart, fanoutEnd, idx, packOffset, totalObjects})
+    // console.log({hash, fanoutStart, fanoutEnd, idx, packOffset, totalObjects})
 
     const packHeaderBuffer = await readLimit(packStream, 12)
     const packFileVersion = packHeaderBuffer.readUIntBE(4, 4)
     const packObjects = packHeaderBuffer.readUIntBE(8, 4)
-    console.log({packHeaderBuffer, packFileVersion, packObjects})
+    // console.log({packHeaderBuffer, packFileVersion, packObjects})
 
     skip = packOffset - 12
-    await readSkip(packStream, skip)
-    // const contentStream = zlib.createInflate()
-    // packStream.pipe(contentStream)
-    const ff = await readLimit(packStream, 100)
-    console.log(ff.toString())
+    tmpBuffer = await readLimit(packStream, 50, {skip: skip})
+    let metaLength = 1
+    let firstByte = tmpBuffer[0]
+    let fileLength = firstByte && 0x0f
+    let packDataType = ''
+    if (firstByte & 0x10) packDataType = 'commit'
+    else if (firstByte & 0x20) packDataType = 'tree'
+    else if (firstByte & 0x30) packDataType = 'blob'
+    else if (firstByte & 0x40) packDataType = 'tag'
+    else if (firstByte & 0x60) packDataType = 'ofs_delta'
+    else if (firstByte & 0x70) packDataType = 'ref_delta'
+
+    while (true) {
+      const b = tmpBuffer[metaLength]
+      const byteOffset = 4 + 7 * (metaLength - 1)
+      fileLength += (b & 0x7f) << byteOffset
+      metaLength++
+      if (!(b >> 7)) break
+    }
+    // console.log({packDataType, metaLength, fileLength}, ff.slice(0, metaLength))
+    packStream.unshift(tmpBuffer.slice(metaLength))
+    const contentStream = packStream
+      .pipe(createLimitedStream(fileLength))
+      .pipe(zlib.createInflate())
+
+    return <LoadResult>{
+      hash: hash,
+      type: packDataType,
+      length: fileLength,
+      stream: contentStream,
+    }
   }
 
-  async loadObject (hash: hash, options: LoadOptions = {}) {
-    if (!isHash(hash)) throw new Error(hash + ' is not hash')
+  async findObjectInObject (hash: hash) {
     const objectPath = path.resolve(this.repoPath, 'objects', hash.substring(0, 2), hash.substring(2))
-    const contentStream = zlib.createInflate()
+    try { await fs.access(objectPath) } catch (e) { return null }
     const fileStream = fs.createReadStream(objectPath)
-    fileStream.pipe(contentStream)
+    const contentStream = fileStream.pipe(zlib.createInflate())
     let chunk = await readUntil(contentStream, Buffer.alloc(1, 0x00))
-    // let chunk = await readOnce(contentStream)
-    // while (!~chunk.indexOf(0x00)) {
-    //   const newChunk = await readOnce(contentStream)
-    //   if (!newChunk) throw new Error('not find 0x00')
-    //   chunk = Buffer.concat([chunk, newChunk])
-    // }
 
     const spaceIndex = chunk.indexOf(SPACE)
     const type = bufferGetAscii(chunk, 0, spaceIndex)
@@ -328,44 +362,33 @@ export class Repo {
     const nilIndex = chunk.indexOf(0x00, spaceIndex)
     const length = bufferGetDecimal(chunk, spaceIndex + 1, nilIndex)
 
-    // const left = chunk.slice(nilIndex + 1)
-    // const streaming = new PassThrough()
-    // streaming.write(left)
-    // contentStream.pipe(streaming)
-
-    const result: LoadResult = {
+    return <LoadResult>{
       type: type,
       hash: hash,
       length: length,
       stream: contentStream,
     }
+  }
+
+  async loadObject (hash: hash, options: LoadOptions = {}) {
+    let result: LoadResult
+    if (!isHash(hash)) throw new Error(hash + ' is not hash')
+    const objectPath = path.resolve(this.repoPath, 'objects', hash.substring(0, 2), hash.substring(2))
+    
+    result = await this.findObjectInObject(hash)
+    if (!result) result = await this.findObjectInAllPack(hash)
+    // if (!result) { throw new Error('no object') }
 
     if (options.loadAll) {
       result.buffer = Buffer.alloc(0)
-      contentStream.on('data', (chunk: Buffer) => {
+      result.stream.on('data', (chunk: Buffer) => {
         result.buffer = Buffer.concat([result.buffer, chunk])
       })
-      await new Promise(resolve => contentStream.on('end', resolve))
+      await new Promise(resolve => result.stream.on('end', resolve))
     }
     return result
   }
 }
-
-// function readOnce (contentStream: Readable): Promise<Buffer> {
-//   return new Promise((resolve, reject) => {
-//     if (!contentStream.readable) return resolve(null)
-//     function onRead (chunk: Buffer) {
-//       contentStream.removeListener('error', onError)
-//       resolve(chunk)
-//     }
-//     function onError (err: Error) {
-//       contentStream.removeListener('data', onRead)
-//       reject(err)
-//     }
-//     contentStream.once('data', onRead)
-//     contentStream.once('error', onError)
-//   })
-// }
 
 function bufferGetAscii (buffer: Buffer, start, end: number) {
   let string = ''
