@@ -1,4 +1,4 @@
 nodejs-git
 ==========
 
-Nodejs implementation for git file system.
+[WIP] Pure Nodejs implementation for git file system.

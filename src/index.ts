@@ -317,17 +317,11 @@ export class Repo {
 
     skip = packOffset - 12
     tmpBuffer = await readLimit(packStream, 50, {skip: skip})
-    let metaLength = 1
-    let firstByte = tmpBuffer[0]
-    let fileLength = firstByte && 0x0f
-    let packDataType = ''
-    if (firstByte & 0x10) packDataType = 'commit'
-    else if (firstByte & 0x20) packDataType = 'tree'
-    else if (firstByte & 0x30) packDataType = 'blob'
-    else if (firstByte & 0x40) packDataType = 'tag'
-    else if (firstByte & 0x60) packDataType = 'ofs_delta'
-    else if (firstByte & 0x70) packDataType = 'ref_delta'
+    const firstByte = tmpBuffer[0]
+    const packDataType = getPackTypeByBit((firstByte & 0x70) >> 4)
 
+    let metaLength = 1
+    let fileLength = firstByte && 0x0f
     while (true) {
       const b = tmpBuffer[metaLength]
       const byteOffset = 4 + 7 * (metaLength - 1)
@@ -335,7 +329,7 @@ export class Repo {
       metaLength++
       if (!(b >> 7)) break
     }
-    // console.log({packDataType, metaLength, fileLength}, ff.slice(0, metaLength))
+    // console.log({packDataType, metaLength, fileLength, typeBit}, tmpBuffer.slice(0, metaLength))
     packStream.unshift(tmpBuffer.slice(metaLength))
     const contentStream = packStream
       .pipe(createLimitedStream(fileLength))
@@ -387,6 +381,18 @@ export class Repo {
       await new Promise(resolve => result.stream.on('end', resolve))
     }
     return result
+  }
+}
+
+function getPackTypeByBit (bit: number) {
+  switch (bit) {
+    case 1: return 'commit'
+    case 2: return 'tree'
+    case 3: return 'blob'
+    case 4: return 'tag'
+    case 6: return 'ofs_delta'
+    case 7: return 'ref_delta'
+    default: throw new Error('unknown bit type ' + bit)
   }
 }
 
