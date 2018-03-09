@@ -296,7 +296,10 @@ export class Repo {
     skip = fanoutStart * 20
     let tmpBuffer = await readUntil(idxStream, hashBuffer, {limit: 0, skip: skip})
     const idx = fanoutStart + tmpBuffer.length / 20
-    if (idx < 0) return null
+    if (idx < 0) {
+      idxStream.destroy()
+      return null
+    }
 
     // left object hash bytes = (totalObjects - idx - 1) * 20
     // crc32 bytes = totalObjects * 4
@@ -304,10 +307,10 @@ export class Repo {
     skip = (totalObjects - idx - 1) * 20 + totalObjects * 4 + idx * 4
     const packOffsetBuffer = await readLimit(idxStream, 4, {skip})
     const packOffset = packOffsetBuffer.readUIntBE(0, 4)
-
     // entry?
 
     // console.log({hash, fanoutStart, fanoutEnd, idx, packOffset, totalObjects})
+    idxStream.destroy()
     return this.findObjectInPackfile(hash, packHash, packOffset)
   }
 
@@ -329,15 +332,20 @@ export class Repo {
     // console.log({packDataType, metaLength, fileLength, typeBit}, tmpBuffer.slice(0, metaLength))
     let refHash = ''
     let ofsOffset = 0
+    let sourceLoadResult: LoadResult
     if (packDataType === 'ref_delta') {
       refHash = tmpBuffer.slice(metaLength, metaLength + 20).toString('hex')
       metaLength += 20
+      sourceLoadResult = await this.loadObject(refHash)
     } else if (packDataType === 'ofs_delta') {
       let {metaLength: metaLength2, fileLength: fileLength2} = getMSBLength(tmpBuffer.slice(metaLength))
       metaLength += metaLength2
       ofsOffset = fileLength2
+      sourceLoadResult = await this.findObjectInPackfile(hash, packHash, packOffset - ofsOffset)
     }
     console.log({hash, packOffset, packDataType, metaLength, fileLength, refHash, ofsOffset}, tmpBuffer.slice(0, metaLength))
+
+    // TODO: get source target
     // TODO: apply delta
 
     packStream.unshift(tmpBuffer.slice(metaLength))
