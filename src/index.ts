@@ -3,8 +3,9 @@ import * as limitFactory from 'promise-limit'
 import * as zlib from 'zlib'
 import * as path from 'path'
 import { PassThrough, Transform, Readable } from 'stream'
-import { readUntil, readLimit, readSkip, createLimitedStream } from './streamUtil'
+import { readUntil, readLimit, readSkip } from './streamUtil'
 
+const NIL = 0x00
 const LF = 0x0a
 const SPACE = 0x20
 const FILE_MODE = {
@@ -196,7 +197,7 @@ export class Repo {
         left = Buffer.concat([left, chunk])
         while (true) {
           const spaceIndex = left.indexOf(SPACE)
-          const nilIndex = left.indexOf(0x00)
+          const nilIndex = left.indexOf(NIL)
           if (nilIndex === -1 || left.length - nilIndex < 20) break
           const filemode = bufferGetOct(left, 0, spaceIndex)
           const filename = left.slice(spaceIndex + 1, nilIndex).toString()
@@ -277,10 +278,8 @@ export class Repo {
     const hashBuffer = Buffer.from(hash, 'hex')
     const hashFanIdx = hashBuffer.readUIntBE(0, 1)
     const idxFilepath = path.resolve(this.repoPath, 'objects', 'pack', `pack-${packHash}.idx`)
-    const packFilepath = path.resolve(this.repoPath, 'objects', 'pack', `pack-${packHash}.pack`)
     // const contentStream = zlib.createInflate()
     const idxStream = fs.createReadStream(idxFilepath)
-    const packStream = fs.createReadStream(packFilepath)
     const idxBuffer = await fs.readFile(idxFilepath)
 
     // buffer mode
@@ -309,30 +308,40 @@ export class Repo {
     // entry?
 
     // console.log({hash, fanoutStart, fanoutEnd, idx, packOffset, totalObjects})
+    return this.findObjectInPackfile(hash, packHash, packOffset)
+  }
 
+  async findObjectInPackfile (hash: hash, packHash: hash, packOffset: number) {
+    const packFilepath = path.resolve(this.repoPath, 'objects', 'pack', `pack-${packHash}.pack`)
+    const packStream = fs.createReadStream(packFilepath)
     const packHeaderBuffer = await readLimit(packStream, 12)
     const packFileVersion = packHeaderBuffer.readUIntBE(4, 4)
     const packObjects = packHeaderBuffer.readUIntBE(8, 4)
     // console.log({packHeaderBuffer, packFileVersion, packObjects})
 
-    skip = packOffset - 12
-    tmpBuffer = await readLimit(packStream, 50, {skip: skip})
+    let skip = packOffset - 12
+    let tmpBuffer = await readLimit(packStream, 50, {skip: skip})
     const firstByte = tmpBuffer[0]
     const packDataType = getPackTypeByBit((firstByte & 0x70) >> 4)
 
-    let metaLength = 1
-    let fileLength = firstByte && 0x0f
-    while (true) {
-      const b = tmpBuffer[metaLength]
-      const byteOffset = 4 + 7 * (metaLength - 1)
-      fileLength += (b & 0x7f) << byteOffset
-      metaLength++
-      if (!(b >> 7)) break
-    }
+    let {metaLength, fileLength} = getMSBLength(tmpBuffer, 4)
+
     // console.log({packDataType, metaLength, fileLength, typeBit}, tmpBuffer.slice(0, metaLength))
+    let refHash = ''
+    let ofsOffset = 0
+    if (packDataType === 'ref_delta') {
+      refHash = tmpBuffer.slice(metaLength, metaLength + 20).toString('hex')
+      metaLength += 20
+    } else if (packDataType === 'ofs_delta') {
+      let {metaLength: metaLength2, fileLength: fileLength2} = getMSBLength(tmpBuffer.slice(metaLength))
+      metaLength += metaLength2
+      ofsOffset = fileLength2
+    }
+    console.log({hash, packOffset, packDataType, metaLength, fileLength, refHash, ofsOffset}, tmpBuffer.slice(0, metaLength))
+    // TODO: apply delta
+
     packStream.unshift(tmpBuffer.slice(metaLength))
     const contentStream = packStream
-      .pipe(createLimitedStream(fileLength))
       .pipe(zlib.createInflate())
 
     return <LoadResult>{
@@ -348,12 +357,12 @@ export class Repo {
     try { await fs.access(objectPath) } catch (e) { return null }
     const fileStream = fs.createReadStream(objectPath)
     const contentStream = fileStream.pipe(zlib.createInflate())
-    let chunk = await readUntil(contentStream, Buffer.alloc(1, 0x00))
+    let chunk = await readUntil(contentStream, Buffer.alloc(1, NIL))
 
     const spaceIndex = chunk.indexOf(SPACE)
     const type = bufferGetAscii(chunk, 0, spaceIndex)
 
-    const nilIndex = chunk.indexOf(0x00, spaceIndex)
+    const nilIndex = chunk.indexOf(NIL, spaceIndex)
     const length = bufferGetDecimal(chunk, spaceIndex + 1, nilIndex)
 
     return <LoadResult>{
@@ -462,4 +471,17 @@ async function listDeepFileList (root: string, prefix: string): Promise<Array<st
 function findAndPop (source: TreeNode, nodes: Array<TreeNode>): TreeNode {
   const index = nodes.findIndex(node => node.name === source.name)
   if (index >= 0) return nodes.splice(index, 1)[0]
+}
+
+function getMSBLength (buffer: Buffer, firstSkipBit: number = 1): {metaLength: number, fileLength: number} {
+  let metaLength = 1
+  let fileLength = buffer[0] & (Math.pow(2, (8 - firstSkipBit)) - 1)
+  if (!(buffer[0] >> 7)) return {metaLength, fileLength}
+  while (true) {
+    const byte = buffer[metaLength++]
+    const bitOffset = (8 - firstSkipBit) % 8 + 7 * (metaLength - 2)
+    fileLength += (byte & 0x7f) << bitOffset
+    if (!(byte >> 7)) break
+  }
+  return {metaLength, fileLength}
 }
