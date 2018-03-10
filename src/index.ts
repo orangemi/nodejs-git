@@ -327,7 +327,7 @@ export class Repo {
     const firstByte = tmpBuffer[0]
     const packDataType = getPackTypeByBit((firstByte & 0x70) >> 4)
 
-    let {metaLength, fileLength} = getMSBLength(tmpBuffer, 4)
+    let {metaLength, fileLength} = parseVInt(tmpBuffer, 4)
 
     // console.log({packDataType, metaLength, fileLength, typeBit}, tmpBuffer.slice(0, metaLength))
     let refHash = ''
@@ -338,25 +338,29 @@ export class Repo {
       metaLength += 20
       sourceLoadResult = await this.loadObject(refHash)
     } else if (packDataType === 'ofs_delta') {
-      let {metaLength: metaLength2, fileLength: fileLength2} = getMSBLength(tmpBuffer.slice(metaLength))
+      let {metaLength: metaLength2, fileLength: fileLength2} = parseVInt2(tmpBuffer.slice(metaLength))
       metaLength += metaLength2
       ofsOffset = fileLength2
+      //console.log({metaLength2, ofsOffset})
       sourceLoadResult = await this.findObjectInPackfile(hash, packHash, packOffset - ofsOffset)
     }
     console.log({hash, packOffset, packDataType, metaLength, fileLength, refHash, ofsOffset}, tmpBuffer.slice(0, metaLength))
-
-    // TODO: get source target
-    // TODO: apply delta
 
     packStream.unshift(tmpBuffer.slice(metaLength))
     const contentStream = packStream
       .pipe(zlib.createInflate())
 
+    let targetStream: Readable = contentStream
+    if (packDataType === 'ref_delta' || packDataType === 'ofs_delta') {
+      // TODO: apply delta
+      targetStream = mergeDeltaStream(sourceLoadResult.stream, contentStream)
+    }
+
     return <LoadResult>{
       hash: hash,
       type: packDataType,
       length: fileLength,
-      stream: contentStream,
+      stream: targetStream,
     }
   }
 
@@ -481,7 +485,7 @@ function findAndPop (source: TreeNode, nodes: Array<TreeNode>): TreeNode {
   if (index >= 0) return nodes.splice(index, 1)[0]
 }
 
-function getMSBLength (buffer: Buffer, firstSkipBit: number = 1): {metaLength: number, fileLength: number} {
+function parseVInt (buffer: Buffer, firstSkipBit: number = 1): {metaLength: number, fileLength: number} {
   let metaLength = 1
   let fileLength = buffer[0] & (Math.pow(2, (8 - firstSkipBit)) - 1)
   if (!(buffer[0] >> 7)) return {metaLength, fileLength}
@@ -492,4 +496,97 @@ function getMSBLength (buffer: Buffer, firstSkipBit: number = 1): {metaLength: n
     if (!(byte >> 7)) break
   }
   return {metaLength, fileLength}
+}
+
+function parseVInt2 (buffer: Buffer): {metaLength: number, fileLength: number} {
+  let metaLength = 0
+  let fileLength = 0
+  while (true) {
+    fileLength = (fileLength << 7) + (buffer[metaLength] & 0x7f)
+    metaLength++
+    if (!(buffer[metaLength - 1] >> 7)) break
+  }
+  for (let i = 1; i < metaLength; i++) fileLength += Math.pow(2, 7 * i)
+  return {metaLength, fileLength}
+}
+
+function mergeDeltaStream (source: Readable, delta: Readable) {
+  let isHeadRead = false
+  let isReading = false
+  let canPush = true
+  let sourceRead = 0
+
+  async function readHead () {
+    let rev
+    let metaLength = 0
+    const buffer = await readLimit(delta, 40)
+
+    rev = parseVInt(buffer)
+    metaLength += rev.metaLength
+    const sourceLength = rev.fileLength
+    
+    rev = parseVInt(buffer.slice(metaLength))
+    metaLength += rev.metaLength
+    const targetLength = rev.fileLength
+
+    console.log({sourceLength, targetLength})
+    delta.unshift(buffer.slice(metaLength))
+    isHeadRead = true
+  }
+
+  const target = new Readable({
+    async read() {
+      if (isReading) return
+      isReading = true
+      console.log('reading')
+      if (!isHeadRead) await readHead()
+
+      while (true) {
+        const buffer = await readLimit(delta, 40)
+        console.log(buffer)
+        const MSB = buffer[0] >> 7
+        if (MSB) {
+          let byteOffset = 1
+          let offset = 0
+          let length = 0
+          // copy
+          for (let bit = 0; bit < 4; bit++) {
+            if (buffer[0] & (1 << bit)) {
+              offset = offset | (buffer[byteOffset++] << (8 * bit))
+            }
+          }
+
+          for (let bit = 4; bit < 7; bit++) {
+            if (buffer[0] & (1 << bit)) {
+              length = length | (buffer[byteOffset++] << (8 * bit))
+            }
+          }
+
+          // console.log('🈴🈴', offset, length, byteOffset, buffer)
+          if (offset < sourceRead) {
+            console.log('offset is before read from source', {sourceRead, offset, length})
+            // throw new Error('offset is before read from source')
+            offset = sourceRead
+          }
+          const data = await readLimit(source, length, {skip: offset - sourceRead})
+          console.log('copying', offset, length, byteOffset)
+          canPush = target.push(data)
+          delta.unshift(buffer.slice(byteOffset))
+          sourceRead = offset + length
+        } else {
+          // insert
+          let length = buffer[0]
+          console.log('inserting', length)
+          canPush = target.push(buffer.slice(1, length + 1))
+          delta.unshift(buffer.slice(length + 1))
+        }
+        if (!canPush) break
+        // console.log(rev, buffer)
+      }
+      isReading = false
+      console.log('reading end')
+    }
+  })
+
+  return target
 }
