@@ -4,7 +4,8 @@ const repo = new Repo('./fixtures/repo')
 console.log(repo)
 async function main () {
   // const hash = '01c9e08fcbef8c6b68e746154e8da2485e19422a'
-  const hash = '8e5c1d4ad4176644f0d4aefda24399d5e64f2b51'
+  // const hash = '8e5c1d4ad4176644f0d4aefda24399d5e64f2b51'
+  const hash = 'fe59f472319660c9fd0f45d325e8f5fe465cffe1'
 
   // const packs = await repo.listPack()
   const result = await repo.findObjectInAllPack(hash)

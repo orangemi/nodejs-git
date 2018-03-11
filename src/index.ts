@@ -326,33 +326,37 @@ export class Repo {
     // console.log({packHeaderBuffer, packFileVersion, packObjects})
 
     let skip = packOffset - 12
-    let tmpBuffer = await readLimit(packStream, 50, {skip: skip})
-    const firstByte = tmpBuffer[0]
+    // await readSkip(packStream, skip)
+    const b = await readLimit(packStream, 1, {skip: skip})
+    const firstByte = b[0]
     const packDataType = getPackTypeByBit((firstByte & 0x70) >> 4)
 
-    let {metaLength, fileLength} = parseVInt(tmpBuffer, 4)
+    // let {metaLength, fileLength} = parseVInt(tmpBuffer, 4)
+    let fileLength = await parseVInt(packStream, firstByte, 4)
 
-    // console.log({packDataType, metaLength, fileLength, typeBit}, tmpBuffer.slice(0, metaLength))
-    let refHash = ''
-    let ofsOffset = 0
+    // console.log({packDataType, fileLength})
+    // let refHash = ''
+    // let ofsOffset = 0
     let getSourceResult: () => Promise<LoadResult>
     // let sourceLoadResult: LoadResult
     if (packDataType === 'ref_delta') {
-      refHash = tmpBuffer.slice(metaLength, metaLength + 20).toString('hex')
-      metaLength += 20
+      const refHashBuffer = await readLimit(packStream, 20)
+      const refHash = refHashBuffer.toString('hex')
+      // refHash = tmpBuffer.slice(metaLength, metaLength + 20).toString('hex')
+      // metaLength += 20
       getSourceResult = () => this.loadObject(refHash)
       // sourceLoadResult = await this.loadObject(refHash)
     } else if (packDataType === 'ofs_delta') {
-      let {metaLength: metaLength2, fileLength: fileLength2} = parseVInt2(tmpBuffer.slice(metaLength))
-      metaLength += metaLength2
-      ofsOffset = fileLength2
+      const ofsOffset = await parseVInt2(packStream)
+      // metaLength += metaLength2
+      // ofsOffset = fileLength2
       //console.log({metaLength2, ofsOffset})
       getSourceResult = () => this.findObjectInPackfile(hash, packHash, packOffset - ofsOffset)
       // sourceLoadResult = await this.findObjectInPackfile(hash, packHash, packOffset - ofsOffset)
     }
     // console.log({hash, packOffset, packDataType, metaLength, fileLength, refHash, ofsOffset}, tmpBuffer.slice(0, metaLength))
 
-    packStream.unshift(tmpBuffer.slice(metaLength))
+    // packStream.unshift(tmpBuffer.slice(metaLength))
     const contentStream = packStream
       .pipe(zlib.createInflate())
 
@@ -491,29 +495,35 @@ function findAndPop (source: TreeNode, nodes: Array<TreeNode>): TreeNode {
   if (index >= 0) return nodes.splice(index, 1)[0]
 }
 
-function parseVInt (buffer: Buffer, firstSkipBit: number = 1): {metaLength: number, fileLength: number} {
-  let metaLength = 1
-  let fileLength = buffer[0] & (Math.pow(2, (8 - firstSkipBit)) - 1)
-  if (!(buffer[0] >> 7)) return {metaLength, fileLength}
+async function parseVInt (stream: Readable, firstByte: number, firstSkipBit: number = 1): Promise<number> {
+  // console.log('parseVInt', firstByte.toString(2))
+  let metaLength = 0
+  let fileLength = firstByte & (Math.pow(2, (8 - firstSkipBit)) - 1)
+  // console.log('parseVInt1', fileLength)
+  if (!(firstByte >> 7)) fileLength
   while (true) {
-    const byte = buffer[metaLength++]
-    const bitOffset = (8 - firstSkipBit) % 8 + 7 * (metaLength - 2)
+    const byteBuffer = await readLimit(stream, 1)
+    const byte = byteBuffer[0]
+    const bitOffset = (8 - firstSkipBit) % 8 + 7 * (metaLength++)
     fileLength += (byte & 0x7f) << bitOffset
+    // console.log('parseVInt2', fileLength, byte.toString(2), bitOffset)
     if (!(byte >> 7)) break
   }
-  return {metaLength, fileLength}
+  return fileLength
 }
 
-function parseVInt2 (buffer: Buffer): {metaLength: number, fileLength: number} {
+async function parseVInt2 (stream: Readable): Promise<number> {
   let metaLength = 0
   let fileLength = 0
   while (true) {
-    fileLength = (fileLength << 7) + (buffer[metaLength] & 0x7f)
+    const byteBuffer = await readLimit(stream, 1)
+    const byte = byteBuffer[0]
+    fileLength = (fileLength << 7) + (byte & 0x7f)
     metaLength++
-    if (!(buffer[metaLength - 1] >> 7)) break
+    if (!(byte >> 7)) break
   }
   for (let i = 1; i < metaLength; i++) fileLength += Math.pow(2, 7 * i)
-  return {metaLength, fileLength}
+  return fileLength
 }
 
 function mergeDeltaStream (delta: Readable, getSourceResult: () => Promise<LoadResult>) {
@@ -538,18 +548,12 @@ function mergeDeltaStream (delta: Readable, getSourceResult: () => Promise<LoadR
   async function readHead () {
     let rev
     let metaLength = 0
-    const buffer = await readLimit(delta, 40)
-
-    rev = parseVInt(buffer)
-    metaLength += rev.metaLength
-    const sourceLength = rev.fileLength
-    
-    rev = parseVInt(buffer.slice(metaLength))
-    metaLength += rev.metaLength
-    const targetLength = rev.fileLength
+    const firstByteBuffer1 = await readLimit(delta, 1)
+    const sourceLength = await parseVInt(delta, firstByteBuffer1[0])
+    const firstByteBuffer2 = await readLimit(delta, 1)
+    const targetLength = await parseVInt(delta, firstByteBuffer2[0])
 
     // console.log({sourceLength, targetLength})
-    delta.unshift(buffer.slice(metaLength))
     isHeadRead = true
   }
 
