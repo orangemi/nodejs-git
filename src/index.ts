@@ -285,14 +285,17 @@ export class Repo {
     // buffer mode
     let offset = 0
     let skip = 0
+    let version = 2
     // let offset2 = 0
-    const headBuffer = await readLimit(idxStream, 256 * 4 + 8)
-    if (headBuffer.readUIntBE(0, 4) === PACK_IDX_2_FANOUT0, headBuffer.readUIntBE(4, 4) === 2) offset += 8
-    else idxStream.unshift(headBuffer.slice(offset + 255 * 4))
-    const totalObjects = headBuffer.readUIntBE(offset + 255 * 4, 4)
-    const fanoutStart = hashFanIdx > 0 ? headBuffer.readUIntBE(offset + (hashFanIdx - 1) * 4, 4) : 0
-    const fanoutEnd = headBuffer.readUIntBE(offset + hashFanIdx * 4, 4)
-    // offset += 1024
+    let headBuffer = await readLimit(idxStream, 256 * 4)
+    if (headBuffer.readUIntBE(0, 4) === PACK_IDX_2_FANOUT0, headBuffer.readUIntBE(4, 4) === 2) {
+      offset += 8
+      headBuffer = Buffer.concat([headBuffer.slice(8), await readLimit(idxStream, 8)])
+    }
+    const totalObjects = headBuffer.readUIntBE(255 * 4, 4)
+    const fanoutStart = hashFanIdx > 0 ? headBuffer.readUIntBE((hashFanIdx - 1) * 4, 4) : 0
+    const fanoutEnd = headBuffer.readUIntBE(hashFanIdx * 4, 4)
+
     skip = fanoutStart * 20
     let tmpBuffer = await readUntil(idxStream, hashBuffer, {limit: 0, skip: skip})
     const idx = fanoutStart + tmpBuffer.length / 20
@@ -521,9 +524,7 @@ function mergeDeltaStream (delta: Readable, getSourceResult: () => Promise<LoadR
   let sourceStream: Readable
 
   async function getSourceStream (force = false) {
-    // console.log('🇧🇷hello', force, sourceStream)
     if (force && sourceStream) {
-      // console.log('🏁clear🏁')
       sourceStream.destroy()
       sourceStream = null
     }
@@ -547,7 +548,7 @@ function mergeDeltaStream (delta: Readable, getSourceResult: () => Promise<LoadR
     metaLength += rev.metaLength
     const targetLength = rev.fileLength
 
-    console.log({sourceLength, targetLength})
+    // console.log({sourceLength, targetLength})
     delta.unshift(buffer.slice(metaLength))
     isHeadRead = true
   }
@@ -560,7 +561,7 @@ function mergeDeltaStream (delta: Readable, getSourceResult: () => Promise<LoadR
       if (!isHeadRead) await readHead()
 
       while (true) {
-        const buffer = await readLimit(delta, 130)
+        const buffer = await readLimit(delta, 1)
         // console.log(buffer)
         const MSB = buffer[0] >> 7
         if (MSB) {
@@ -570,13 +571,15 @@ function mergeDeltaStream (delta: Readable, getSourceResult: () => Promise<LoadR
           // copy
           for (let bit = 0; bit < 4; bit++) {
             if (buffer[0] & (1 << bit)) {
-              offset = offset | (buffer[byteOffset++] << (8 * bit))
+              const b = await readLimit(delta, 1)
+              offset = offset | (b[0] << (8 * bit))
             }
           }
 
           for (let bit = 4; bit < 7; bit++) {
             if (buffer[0] & (1 << bit)) {
-              length = length | (buffer[byteOffset++] << (8 * bit))
+              const b = await readLimit(delta, 1)
+              length = length | (b[0] << (8 * bit))
             }
           }
 
@@ -590,14 +593,16 @@ function mergeDeltaStream (delta: Readable, getSourceResult: () => Promise<LoadR
           const data = await readLimit(source, length, {skip: offset - sourceRead})
           // console.log('copying', offset, length, byteOffset, {sourceRead, skip: offset - sourceRead})
           canPush = target.push(data)
-          delta.unshift(buffer.slice(byteOffset))
+          // delta.unshift(buffer.slice(byteOffset))
           sourceRead = offset + length
         } else {
           // insert
           let length = buffer[0]
           // console.log('inserting', length)
-          canPush = target.push(buffer.slice(1, length + 1))
-          delta.unshift(buffer.slice(length + 1))
+          const data = await readLimit(delta, length)
+          canPush = target.push(data)
+          // canPush = target.push(buffer.slice(1, length + 1))
+          // delta.unshift(buffer.slice(length + 1))
         }
         if (!canPush) break
         // console.log(rev, buffer)
