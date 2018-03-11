@@ -8,13 +8,17 @@ async function main () {
   const hash = 'fe59f472319660c9fd0f45d325e8f5fe465cffe1'
 
   // const packs = await repo.listPack()
-  const result = await repo.findObjectInAllPack(hash)
-  console.log(result.type, result.length)
-  result.stream.pipe(process.stdout)
+  // const result = await repo.findObjectInAllPack(hash)
+  // console.log(result.hash, result.type, result.length)
+  // result.stream.pipe(process.stdout)
   // result.stream.on('data', data => console.log(data.toString()))
   // result.stream.on('end', () => console.log('data end'))
   // console.log(result.stream)
   // console.log(result)
+  // const tree = await repo.loadObject(hash, {loadAll: true})
+  // console.log(tree.buffer)
+  const tree = await repo.loadTree(hash, {loadAll: true})
+  console.log(tree.nodes)
 }
 
 main().catch(err => {

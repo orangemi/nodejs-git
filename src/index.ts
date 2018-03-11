@@ -332,8 +332,9 @@ export class Repo {
     const packDataType = getPackTypeByBit((firstByte & 0x70) >> 4)
 
     // let {metaLength, fileLength} = parseVInt(tmpBuffer, 4)
-    let fileLength = await parseVInt(packStream, firstByte, 4)
-
+    const fileLength = await parseVInt(packStream, firstByte, 4)
+    let objectType = packDataType
+    let objectLength = fileLength
     // console.log({packDataType, fileLength})
     // let refHash = ''
     // let ofsOffset = 0
@@ -363,13 +364,13 @@ export class Repo {
     let targetStream: Readable = contentStream
     if (packDataType === 'ref_delta' || packDataType === 'ofs_delta') {
       // TODO: apply delta
-      targetStream = mergeDeltaStream(contentStream, getSourceResult)
+      return mergeDeltaResult(contentStream, getSourceResult)
     }
 
     return <LoadResult>{
       hash: hash,
-      type: packDataType,
-      length: fileLength,
+      type: objectType,
+      length: objectLength,
       stream: targetStream,
     }
   }
@@ -405,6 +406,7 @@ export class Repo {
     // if (!result) { throw new Error('no object') }
 
     if (options.loadAll) {
+      // result.buffer = await readLimit(result.stream, result.length)
       result.buffer = Buffer.alloc(0)
       result.stream.on('data', (chunk: Buffer) => {
         result.buffer = Buffer.concat([result.buffer, chunk])
@@ -526,12 +528,12 @@ async function parseVInt2 (stream: Readable): Promise<number> {
   return fileLength
 }
 
-function mergeDeltaStream (delta: Readable, getSourceResult: () => Promise<LoadResult>) {
-  let isHeadRead = false
+async function mergeDeltaResult (delta: Readable, getSourceResult: () => Promise<LoadResult>) {
+  const targetLength = await readDeltaHead(delta)
+  const sourceResult = await getSourceResult()
   let isReading = false
-  let canPush = true
   let sourceRead = 0
-  let sourceStream: Readable
+  let sourceStream = sourceResult.stream
 
   async function getSourceStream (force = false) {
     if (force && sourceStream) {
@@ -545,27 +547,20 @@ function mergeDeltaStream (delta: Readable, getSourceResult: () => Promise<LoadR
     return sourceStream
   }
 
-  async function readHead () {
-    let rev
-    let metaLength = 0
-    const firstByteBuffer1 = await readLimit(delta, 1)
-    const sourceLength = await parseVInt(delta, firstByteBuffer1[0])
-    const firstByteBuffer2 = await readLimit(delta, 1)
-    const targetLength = await parseVInt(delta, firstByteBuffer2[0])
-
-    // console.log({sourceLength, targetLength})
-    isHeadRead = true
-  }
-
-  const target = new Readable({
+  const targetStream = new Readable({
     async read() {
       if (isReading) return
       isReading = true
       // console.log('reading')
-      if (!isHeadRead) await readHead()
+      // if (!isHeadRead) await readHead()
+      let canPush = true
 
       while (true) {
         const buffer = await readLimit(delta, 1)
+        if (!buffer.length) {
+          this.push(null)
+          break
+        }
         // console.log(buffer)
         const MSB = buffer[0] >> 7
         if (MSB) {
@@ -596,7 +591,7 @@ function mergeDeltaStream (delta: Readable, getSourceResult: () => Promise<LoadR
           }
           const data = await readLimit(source, length, {skip: offset - sourceRead})
           // console.log('copying', offset, length, byteOffset, {sourceRead, skip: offset - sourceRead})
-          canPush = target.push(data)
+          canPush = this.push(data)
           // delta.unshift(buffer.slice(byteOffset))
           sourceRead = offset + length
         } else {
@@ -604,7 +599,7 @@ function mergeDeltaStream (delta: Readable, getSourceResult: () => Promise<LoadR
           let length = buffer[0]
           // console.log('inserting', length)
           const data = await readLimit(delta, length)
-          canPush = target.push(data)
+          canPush = this.push(data)
           // canPush = target.push(buffer.slice(1, length + 1))
           // delta.unshift(buffer.slice(length + 1))
         }
@@ -612,9 +607,23 @@ function mergeDeltaStream (delta: Readable, getSourceResult: () => Promise<LoadR
         // console.log(rev, buffer)
       }
       isReading = false
-      console.log('reading end')
+      // console.log('reading end')
     }
   })
 
-  return target
+  return <LoadResult>{
+    hash: sourceResult.hash,
+    type: sourceResult.type,
+    length: targetLength,
+    stream: targetStream,
+  }
+}
+
+async function readDeltaHead(delta: Readable) {
+  const firstByteBuffer1 = await readLimit(delta, 1)
+  const sourceLength = await parseVInt(delta, firstByteBuffer1[0])
+  const firstByteBuffer2 = await readLimit(delta, 1)
+  const targetLength = await parseVInt(delta, firstByteBuffer2[0])
+  // console.log({sourceLength, targetLength})
+  return targetLength
 }
