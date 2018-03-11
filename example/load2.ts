@@ -9,8 +9,9 @@ async function main () {
   // const packs = await repo.listPack()
   const result = await repo.findObjectInAllPack(hash)
   console.log(result.type, result.length)
-  result.stream.on('data', data => console.log(data.toString()))
-  result.stream.on('end', () => console.log('data end'))
+  result.stream.pipe(process.stdout)
+  // result.stream.on('data', data => console.log(data.toString()))
+  // result.stream.on('end', () => console.log('data end'))
   // console.log(result.stream)
   // console.log(result)
 }

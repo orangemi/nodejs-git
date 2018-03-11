@@ -332,19 +332,22 @@ export class Repo {
     // console.log({packDataType, metaLength, fileLength, typeBit}, tmpBuffer.slice(0, metaLength))
     let refHash = ''
     let ofsOffset = 0
-    let sourceLoadResult: LoadResult
+    let getSourceResult: () => Promise<LoadResult>
+    // let sourceLoadResult: LoadResult
     if (packDataType === 'ref_delta') {
       refHash = tmpBuffer.slice(metaLength, metaLength + 20).toString('hex')
       metaLength += 20
-      sourceLoadResult = await this.loadObject(refHash)
+      getSourceResult = () => this.loadObject(refHash)
+      // sourceLoadResult = await this.loadObject(refHash)
     } else if (packDataType === 'ofs_delta') {
       let {metaLength: metaLength2, fileLength: fileLength2} = parseVInt2(tmpBuffer.slice(metaLength))
       metaLength += metaLength2
       ofsOffset = fileLength2
       //console.log({metaLength2, ofsOffset})
-      sourceLoadResult = await this.findObjectInPackfile(hash, packHash, packOffset - ofsOffset)
+      getSourceResult = () => this.findObjectInPackfile(hash, packHash, packOffset - ofsOffset)
+      // sourceLoadResult = await this.findObjectInPackfile(hash, packHash, packOffset - ofsOffset)
     }
-    console.log({hash, packOffset, packDataType, metaLength, fileLength, refHash, ofsOffset}, tmpBuffer.slice(0, metaLength))
+    // console.log({hash, packOffset, packDataType, metaLength, fileLength, refHash, ofsOffset}, tmpBuffer.slice(0, metaLength))
 
     packStream.unshift(tmpBuffer.slice(metaLength))
     const contentStream = packStream
@@ -353,7 +356,7 @@ export class Repo {
     let targetStream: Readable = contentStream
     if (packDataType === 'ref_delta' || packDataType === 'ofs_delta') {
       // TODO: apply delta
-      targetStream = mergeDeltaStream(sourceLoadResult.stream, contentStream)
+      targetStream = mergeDeltaStream(contentStream, getSourceResult)
     }
 
     return <LoadResult>{
@@ -510,11 +513,26 @@ function parseVInt2 (buffer: Buffer): {metaLength: number, fileLength: number} {
   return {metaLength, fileLength}
 }
 
-function mergeDeltaStream (source: Readable, delta: Readable) {
+function mergeDeltaStream (delta: Readable, getSourceResult: () => Promise<LoadResult>) {
   let isHeadRead = false
   let isReading = false
   let canPush = true
   let sourceRead = 0
+  let sourceStream: Readable
+
+  async function getSourceStream (force = false) {
+    // console.log('🇧🇷hello', force, sourceStream)
+    if (force && sourceStream) {
+      // console.log('🏁clear🏁')
+      sourceStream.destroy()
+      sourceStream = null
+    }
+    if (!sourceStream) {
+      const loadResult = await getSourceResult()
+      sourceStream = loadResult.stream
+    }
+    return sourceStream
+  }
 
   async function readHead () {
     let rev
@@ -538,12 +556,12 @@ function mergeDeltaStream (source: Readable, delta: Readable) {
     async read() {
       if (isReading) return
       isReading = true
-      console.log('reading')
+      // console.log('reading')
       if (!isHeadRead) await readHead()
 
       while (true) {
-        const buffer = await readLimit(delta, 40)
-        console.log(buffer)
+        const buffer = await readLimit(delta, 130)
+        // console.log(buffer)
         const MSB = buffer[0] >> 7
         if (MSB) {
           let byteOffset = 1
@@ -563,20 +581,21 @@ function mergeDeltaStream (source: Readable, delta: Readable) {
           }
 
           // console.log('🈴🈴', offset, length, byteOffset, buffer)
+          let source = await getSourceStream()
           if (offset < sourceRead) {
-            console.log('offset is before read from source', {sourceRead, offset, length})
-            // throw new Error('offset is before read from source')
-            offset = sourceRead
+            // console.log('offset is before read from source', {sourceRead, offset, length})
+            source = await getSourceStream(true)
+            sourceRead = 0
           }
           const data = await readLimit(source, length, {skip: offset - sourceRead})
-          console.log('copying', offset, length, byteOffset)
+          // console.log('copying', offset, length, byteOffset, {sourceRead, skip: offset - sourceRead})
           canPush = target.push(data)
           delta.unshift(buffer.slice(byteOffset))
           sourceRead = offset + length
         } else {
           // insert
           let length = buffer[0]
-          console.log('inserting', length)
+          // console.log('inserting', length)
           canPush = target.push(buffer.slice(1, length + 1))
           delta.unshift(buffer.slice(length + 1))
         }
