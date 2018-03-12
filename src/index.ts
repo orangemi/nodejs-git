@@ -1,9 +1,10 @@
-import * as fs from 'mz/fs'
-import * as limitFactory from 'promise-limit'
 import * as zlib from 'zlib'
 import * as path from 'path'
+import * as fs from 'mz/fs'
+import { hash, LoadOptions, LoadResult, DiffResult, TreeNode, TreeResult, CommitResult, Author } from './ref'
 import { PassThrough, Transform, Readable } from 'stream'
 import { readUntil, readLimit, readSkip } from './streamUtil'
+import { getPackTypeByBit, bufferGetAscii, bufferGetOct, bufferGetDecimal, isHash, parseAuthor, listDeepFileList, findAndPop, parseVInt, parseVInt2, mergeDeltaResult } from './helper'
 
 const NIL = 0x00
 const LF = 0x0a
@@ -13,59 +14,8 @@ const FILE_MODE = {
   DIR: 0x4000
 }
 
+const REF_REGEX = /^ref: *(.*)/
 const PACK_IDX_2_FANOUT0 = 0xff744f63
-
-export interface DiffResult {
-  // left: TreeNode,
-  // right: TreeNode,
-  path: string,
-  leftMode: number,
-  rightMode: number,
-  leftHash: string,
-  rightHash: string,
-}
-
-export interface LoadOptions {
-  loadAll?: Boolean,
-}
-
-export interface LoadResult {
-  type: string,
-  hash: hash,
-  length: number,
-  stream: Readable,
-  buffer?: Buffer,
-}
-
-export interface CommitResult {
-  type: string,
-  hash: hash,
-  tree: string,
-  committer: Author,
-  author: Author,
-  message: string,
-  parent: Array<string>,
-}
-
-export interface Author {
-  name: string,
-  email: string,
-  emails?: Array<string>,
-  date: Date,
-  timezone?: string,
-}
-
-export interface TreeResult extends LoadResult {
-  nodes?: Array<TreeNode>,
-}
-
-export interface TreeNode {
-  mode: number,
-  name: string,
-  hash: hash,
-}
-
-export type hash = string
 
 export class Repo {
   repoPath: string
@@ -323,55 +273,33 @@ export class Repo {
     const packHeaderBuffer = await readLimit(packStream, 12)
     const packFileVersion = packHeaderBuffer.readUIntBE(4, 4)
     const packObjects = packHeaderBuffer.readUIntBE(8, 4)
-    // console.log({packHeaderBuffer, packFileVersion, packObjects})
 
     let skip = packOffset - 12
-    // await readSkip(packStream, skip)
     const b = await readLimit(packStream, 1, {skip: skip})
     const firstByte = b[0]
     const packDataType = getPackTypeByBit((firstByte & 0x70) >> 4)
 
-    // let {metaLength, fileLength} = parseVInt(tmpBuffer, 4)
     const fileLength = await parseVInt(packStream, firstByte, 4)
-    let objectType = packDataType
-    let objectLength = fileLength
-    // console.log({packDataType, fileLength})
-    // let refHash = ''
-    // let ofsOffset = 0
     let getSourceResult: () => Promise<LoadResult>
-    // let sourceLoadResult: LoadResult
     if (packDataType === 'ref_delta') {
       const refHashBuffer = await readLimit(packStream, 20)
       const refHash = refHashBuffer.toString('hex')
-      // refHash = tmpBuffer.slice(metaLength, metaLength + 20).toString('hex')
-      // metaLength += 20
       getSourceResult = () => this.loadObject(refHash)
-      // sourceLoadResult = await this.loadObject(refHash)
     } else if (packDataType === 'ofs_delta') {
       const ofsOffset = await parseVInt2(packStream)
-      // metaLength += metaLength2
-      // ofsOffset = fileLength2
-      //console.log({metaLength2, ofsOffset})
       getSourceResult = () => this.findObjectInPackfile(hash, packHash, packOffset - ofsOffset)
-      // sourceLoadResult = await this.findObjectInPackfile(hash, packHash, packOffset - ofsOffset)
     }
-    // console.log({hash, packOffset, packDataType, metaLength, fileLength, refHash, ofsOffset}, tmpBuffer.slice(0, metaLength))
 
-    // packStream.unshift(tmpBuffer.slice(metaLength))
-    const contentStream = packStream
-      .pipe(zlib.createInflate())
-
-    let targetStream: Readable = contentStream
+    const contentStream = packStream.pipe(zlib.createInflate())
     if (packDataType === 'ref_delta' || packDataType === 'ofs_delta') {
-      // TODO: apply delta
       return mergeDeltaResult(contentStream, getSourceResult)
     }
 
     return <LoadResult>{
       hash: hash,
-      type: objectType,
-      length: objectLength,
-      stream: targetStream,
+      type: packDataType,
+      length: fileLength,
+      stream: contentStream,
     }
   }
 
@@ -403,10 +331,9 @@ export class Repo {
     
     result = await this.findObjectInObject(hash)
     if (!result) result = await this.findObjectInAllPack(hash)
-    // if (!result) { throw new Error('no object') }
+    if (!result) { throw new Error('can not find object') }
 
     if (options.loadAll) {
-      // result.buffer = await readLimit(result.stream, result.length)
       result.buffer = Buffer.alloc(0)
       result.stream.on('data', (chunk: Buffer) => {
         result.buffer = Buffer.concat([result.buffer, chunk])
@@ -415,215 +342,4 @@ export class Repo {
     }
     return result
   }
-}
-
-function getPackTypeByBit (bit: number) {
-  switch (bit) {
-    case 1: return 'commit'
-    case 2: return 'tree'
-    case 3: return 'blob'
-    case 4: return 'tag'
-    case 6: return 'ofs_delta'
-    case 7: return 'ref_delta'
-    default: throw new Error('unknown bit type ' + bit)
-  }
-}
-
-function bufferGetAscii (buffer: Buffer, start, end: number) {
-  let string = ''
-  for (let i = start; i < end; i++) {
-    string += String.fromCharCode(buffer[i])
-  }
-  return string
-}
-
-function bufferGetOct (buffer: Buffer, start, end: number) {
-  let number = 0
-  for (let i = start; i < end; i++) {
-    number = (number << 3) + buffer[start++] - 0x30;
-  }
-  return number
-}
-
-function bufferGetDecimal (buffer: Buffer, start, end: number) {
-  let number = 0
-  for (let i = start; i < end; i++) {
-    number = number * 10 + buffer[i] - 0x30
-  }
-  return number
-}
-
-const REF_REGEX = /^ref: *(.*)/
-const HASH_REGEX = /^[0-9a-fA-F]{40}$/
-function isHash (string: string) {
-  return HASH_REGEX.test(string)
-}
-
-function parseAuthor (string: string) {
-  const ltIndex = string.indexOf(' <')
-  const rtIndex = string.indexOf('> ', ltIndex + 2)
-  const spaceIndex = string.indexOf(' ', rtIndex + 2)
-  const result: Author = {
-    name: string.substring(0, ltIndex),
-    email: string.substring(ltIndex + 2, rtIndex),
-    date: new Date(1000 * parseInt(string.substring(rtIndex + 2, spaceIndex))),
-    timezone: string.substring(spaceIndex + 1),
-  }
-  return result
-}
-
-async function listDeepFileList (root: string, prefix: string): Promise<Array<string>> {
-  const files = await fs.readdir(path.resolve(root, prefix))
-  files.filter(file => /^\./.test(file))
-  const limiter = limitFactory(5)
-  const refss: Array<Array<string>> = await Promise.all(files.map(file => limiter(async () => {
-    file = prefix + '/' + file
-    const fsStat = await fs.stat(path.resolve(root, file))
-    if (fsStat.isFile() && fsStat.size >= 40 && fsStat.size <= 41) {
-      const content = await fs.readFile(path.resolve(root, file))
-      const hash = content.toString().trim()
-      return [file]
-    }
-    if (fsStat.isDirectory()) return listDeepFileList(root, file)
-    throw new Error('unknown ref ' + file)
-  })))
-  const result: Array<string> = []
-  refss.forEach(refs => refs.forEach(ref => result.push(ref)))
-  return result
-}
-
-function findAndPop (source: TreeNode, nodes: Array<TreeNode>): TreeNode {
-  const index = nodes.findIndex(node => node.name === source.name)
-  if (index >= 0) return nodes.splice(index, 1)[0]
-}
-
-async function parseVInt (stream: Readable, firstByte: number, firstSkipBit: number = 1): Promise<number> {
-  // console.log('parseVInt', firstByte.toString(2))
-  let metaLength = 0
-  let fileLength = firstByte & (Math.pow(2, (8 - firstSkipBit)) - 1)
-  // console.log('parseVInt1', fileLength)
-  if (!(firstByte >> 7)) fileLength
-  while (true) {
-    const byteBuffer = await readLimit(stream, 1)
-    const byte = byteBuffer[0]
-    const bitOffset = (8 - firstSkipBit) % 8 + 7 * (metaLength++)
-    fileLength += (byte & 0x7f) << bitOffset
-    // console.log('parseVInt2', fileLength, byte.toString(2), bitOffset)
-    if (!(byte >> 7)) break
-  }
-  return fileLength
-}
-
-async function parseVInt2 (stream: Readable): Promise<number> {
-  let metaLength = 0
-  let fileLength = 0
-  while (true) {
-    const byteBuffer = await readLimit(stream, 1)
-    const byte = byteBuffer[0]
-    fileLength = (fileLength << 7) + (byte & 0x7f)
-    metaLength++
-    if (!(byte >> 7)) break
-  }
-  for (let i = 1; i < metaLength; i++) fileLength += Math.pow(2, 7 * i)
-  return fileLength
-}
-
-async function mergeDeltaResult (delta: Readable, getSourceResult: () => Promise<LoadResult>) {
-  const targetLength = await readDeltaHead(delta)
-  const sourceResult = await getSourceResult()
-  let isReading = false
-  let sourceRead = 0
-  let sourceStream = sourceResult.stream
-
-  async function getSourceStream (force = false) {
-    if (force && sourceStream) {
-      sourceStream.destroy()
-      sourceStream = null
-    }
-    if (!sourceStream) {
-      const loadResult = await getSourceResult()
-      sourceStream = loadResult.stream
-    }
-    return sourceStream
-  }
-
-  const targetStream = new Readable({
-    async read() {
-      if (isReading) return
-      isReading = true
-      // console.log('reading')
-      // if (!isHeadRead) await readHead()
-      let canPush = true
-
-      while (true) {
-        const buffer = await readLimit(delta, 1)
-        if (!buffer.length) {
-          this.push(null)
-          break
-        }
-        // console.log(buffer)
-        const MSB = buffer[0] >> 7
-        if (MSB) {
-          let byteOffset = 1
-          let offset = 0
-          let length = 0
-          // copy
-          for (let bit = 0; bit < 4; bit++) {
-            if (buffer[0] & (1 << bit)) {
-              const b = await readLimit(delta, 1)
-              offset = offset | (b[0] << (8 * bit))
-            }
-          }
-
-          for (let bit = 4; bit < 7; bit++) {
-            if (buffer[0] & (1 << bit)) {
-              const b = await readLimit(delta, 1)
-              length = length | (b[0] << (8 * bit))
-            }
-          }
-
-          // console.log('🈴🈴', offset, length, byteOffset, buffer)
-          let source = await getSourceStream()
-          if (offset < sourceRead) {
-            // console.log('offset is before read from source', {sourceRead, offset, length})
-            source = await getSourceStream(true)
-            sourceRead = 0
-          }
-          const data = await readLimit(source, length, {skip: offset - sourceRead})
-          // console.log('copying', offset, length, byteOffset, {sourceRead, skip: offset - sourceRead})
-          canPush = this.push(data)
-          // delta.unshift(buffer.slice(byteOffset))
-          sourceRead = offset + length
-        } else {
-          // insert
-          let length = buffer[0]
-          // console.log('inserting', length)
-          const data = await readLimit(delta, length)
-          canPush = this.push(data)
-          // canPush = target.push(buffer.slice(1, length + 1))
-          // delta.unshift(buffer.slice(length + 1))
-        }
-        if (!canPush) break
-        // console.log(rev, buffer)
-      }
-      isReading = false
-      // console.log('reading end')
-    }
-  })
-
-  return <LoadResult>{
-    hash: sourceResult.hash,
-    type: sourceResult.type,
-    length: targetLength,
-    stream: targetStream,
-  }
-}
-
-async function readDeltaHead(delta: Readable) {
-  const firstByteBuffer1 = await readLimit(delta, 1)
-  const sourceLength = await parseVInt(delta, firstByteBuffer1[0])
-  const firstByteBuffer2 = await readLimit(delta, 1)
-  const targetLength = await parseVInt(delta, firstByteBuffer2[0])
-  // console.log({sourceLength, targetLength})
-  return targetLength
 }

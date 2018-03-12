@@ -6,3 +6,7 @@ nodejs-git
 ## Development
 ### Build
 npm run build
+
+## TODO
+- [ ] Add more docs
+- [ ] Add tests
