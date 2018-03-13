@@ -2,10 +2,10 @@
   "name": "nodejs-git",
   "version": "0.1.0",
   "description": "",
-  "main": "lib/index.js",
+  "main": "lib",
   "scripts": {
     "build": "tsc --declaration --outDir lib",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "mocha -r ts-node/register test/**/*.test.ts"
   },
   "author": "Orange Mi",
   "license": "MIT",
@@ -14,6 +14,7 @@
     "promise-limit": "^2.5.0"
   },
   "devDependencies": {
+    "@types/mocha": "^5.0.0",
     "@types/mz": "0.0.32",
     "@types/node": "^9.4.6",
     "colors": "^1.1.2",
