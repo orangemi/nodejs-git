@@ -2,7 +2,7 @@
   "name": "nodejs-git",
   "version": "0.1.0",
   "description": "",
-  "main": "lib/index.js",
+  "main": "lib",
   "scripts": {
     "build": "tsc --declaration --outDir lib",
     "test": "echo \"Error: no test specified\" && exit 1"

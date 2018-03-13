@@ -17,6 +17,7 @@ const FILE_MODE = {
 const REF_REGEX = /^ref: *(.*)/
 const PACK_IDX_2_FANOUT0 = 0xff744f63
 
+export * from './ref'
 export class Repo {
   repoPath: string
   constructor (repoPath: string) {
