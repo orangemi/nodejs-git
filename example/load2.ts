@@ -7,6 +7,10 @@ async function main () {
   hash = '01c9e08fcbef8c6b68e746154e8da2485e19422a'
   hash = '8e5c1d4ad4176644f0d4aefda24399d5e64f2b51'
   hash = '041bff8f7b1a6d77d3149b5797146d5e88df8350'
+  hash = 'bc92aff41b3e86ef2663317a9a73c5809a1ab7e0'
+  hash = 'f8bb9f5d1f55eb312eef8f8226256f9533c07c86'
+  // hash = '041bff8f7b1a6d77d3149b5797146d5e88df8350'
+  // hash = 'e46c042c69177b60c433ef6ab6c5fa7f1eb62994'
 
 
   // const packs = await repo.listPack()
