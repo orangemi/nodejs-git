@@ -15,6 +15,7 @@ export function readUntil (
 
     onReadable()
     function onReadable () {
+      if (!source.readable) return done(null)
       let chunk: Buffer
       while ((chunk = source.read()) !== null) {
         if (read + chunk.length >= skip) {
@@ -63,12 +64,13 @@ export function readLimit (
     const skip = options.skip || 0
     let read = 0
     let buffer = Buffer.alloc(0)
-  
+    
     source.on('end', onEnd)
     source.on('error', onError)
 
     onReadable()
     function onReadable () {
+      if (!source.readable) return done(null)
       let chunk: Buffer
       while ((chunk = source.read()) !== null) {
         if (read + chunk.length >= skip) {
@@ -114,6 +116,7 @@ export function readSkip (
 
     onReadable()
     function onReadable () {
+      if (!source.readable) return done(null)
       let chunk: Buffer
       while ((chunk = source.read()) !== null) {
         read += chunk.length
@@ -144,17 +147,17 @@ export function readSkip (
   })
 }
 
-export function createLimitedStream (limit: number) {
-  let read = 0
-  const tunnel = new stream.Transform({
-    transform(chunk: Buffer, encoding: string, callback: Function) {
-      if (read < limit) {
-        this.push(chunk.slice(0, limit - read))
-        if (read + chunk.length >= limit) this.push(null)
-        read += chunk.length
-        callback()
-      }
-    }
-  })
-  return tunnel
-}
+// export function createLimitedStream (limit: number) {
+//   let read = 0
+//   const tunnel = new stream.Transform({
+//     transform(chunk: Buffer, encoding: string, callback: Function) {
+//       if (read < limit) {
+//         this.push(chunk.slice(0, limit - read))
+//         if (read + chunk.length >= limit) this.push(null)
+//         read += chunk.length
+//         callback()
+//       }
+//     }
+//   })
+//   return tunnel
+// }

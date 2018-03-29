@@ -41,6 +41,7 @@ export class Repo {
   }
 
   async diffTree (hash1: hash, hash2: hash, options = {recursive: true, prefix: ''}) {
+    // console.log('diffTree', {hash1, hash2})
     const prefix = options.prefix || ''
     let result: Array<DiffResult> = []
     let nodes1: Array<TreeNode> = []
@@ -53,6 +54,8 @@ export class Repo {
       const tree = await this.loadTree(hash2, {loadAll: true})
       nodes2 = nodes2.concat(tree.nodes)
     }
+
+    // console.log('---', nodes1, nodes2)
   
     await Promise.all(nodes1.map(async (node1) => {
       const node2 = findAndPop(node1, nodes2)
@@ -138,6 +141,7 @@ export class Repo {
   }
 
   async loadTree (hash: hash, options: LoadOptions = {}) {
+    // console.log('loadTree', hash)
     if (!isHash(hash)) throw new Error(hash + ' is not hash')
     const loadResult = await this.loadObject(hash)
     if (loadResult.type !== 'tree') throw new Error(hash + ' is not tree')
@@ -279,7 +283,7 @@ export class Repo {
     const b = await readLimit(packStream, 1, {skip: skip})
     const firstByte = b[0]
     const packDataType = getPackTypeByBit((firstByte & 0x70) >> 4)
-
+    
     const fileLength = await parseVInt(packStream, firstByte, 4)
     let getSourceResult: () => Promise<LoadResult>
     if (packDataType === 'ref_delta') {

@@ -90,13 +90,13 @@ export async function parseVInt (stream: Readable, firstByte: number, firstSkipB
   let metaLength = 0
   let fileLength = firstByte & (Math.pow(2, (8 - firstSkipBit)) - 1)
   // console.log('parseVInt1', fileLength)
-  if (!(firstByte >> 7)) fileLength
+  if (!(firstByte >> 7)) return fileLength
   while (true) {
     const byteBuffer = await readLimit(stream, 1)
     const byte = byteBuffer[0]
     const bitOffset = (8 - firstSkipBit) % 8 + 7 * (metaLength++)
     fileLength += (byte & 0x7f) << bitOffset
-    // console.log('parseVInt2', fileLength, byte.toString(2), bitOffset)
+    // console.log('parseVInt2', fileLength, byteBuffer, byte.toString(2), bitOffset)
     if (!(byte >> 7)) break
   }
   return fileLength

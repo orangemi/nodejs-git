@@ -1,5 +1,5 @@
 import * as path from 'path'
-import {Repo} from '../src'
+import {Repo, CommitResult} from '../src'
 import * as diff from 'diff'
 import * as colors from 'colors/safe'
 
@@ -7,34 +7,20 @@ const repo = new Repo('./fixtures/repo')
 console.log(repo)
 async function main () {
   let commit = await repo.loadHead()
-  while (commit.parent.length) {
-    console.log('----------')
-    console.log('commit:', commit.hash)
+  commit = await repo.loadCommit('01c8f665e11cfb71f4e1460eb0efd3bc925bb8f5')
+  while (true) {
+    console.log('----------', commit.committer.date, '---------')
+    console.log('commit:', commit.hash, commit.parent)
     console.log(commit.message)
-    let parent = await repo.loadCommit(commit.parent[0])
-    const diffs = await repo.diffTree(commit.tree, parent.tree)
+    let parent = commit.parent[0] ? await repo.loadCommit(commit.parent[0]) : <CommitResult>{tree: ''}
 
+    const diffs = await repo.diffTree(commit.tree, parent.tree)
     for (const diffOne of diffs) {
       console.log('diff: ', diffOne.leftMode, diffOne.rightMode, diffOne.path)
-      // let left = ''
-      // let right = ''
-      // if (diffOne.leftHash) {
-      //   const blob = await repo.loadBlob(diffOne.leftHash, {loadAll: true})
-      //   left = blob.buffer.toString('utf8')
-      // }
-      // if (diffOne.rightHash) {
-      //   const blob = await repo.loadBlob(diffOne.rightHash, {loadAll: true})
-      //   right = blob.buffer.toString('utf8')
-      // }
-      // const lines = diff.diffLines(right, left)
-      // lines.forEach((part, i) => {
-      //   var color = part.added ? 'green' : part.removed ? 'red' : 'grey'
-      //   console.log('part', i)
-      //   process.stdout.write(colors[color](part.value))
-      // });
     }
 
     commit = parent
+    if (!commit.hash) break
   }
 }
 
