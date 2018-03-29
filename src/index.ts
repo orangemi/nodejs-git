@@ -37,6 +37,7 @@ export class Repo {
   }
 
   async listRefs (prefix: string = 'refs/heads') {
+    // TODO: list ref in pack-ref
     return listDeepFileList(this.repoPath, prefix)
   }
 
@@ -202,12 +203,14 @@ export class Repo {
 
   async loadTag (tag: string) {
     const hash = await this.loadFileHash('refs/tags/' + tag)
-    const loadResult = await this.loadObject(hash, {loadAll: true})
+    return this.loadCommit(hash)
+    // const loadResult = await this.loadObject(hash, {loadAll: true})
     // console.log('----', loadResult.buffer.toString())
     // TODO: add TagResult Output
   }
 
   async loadFileHash (filepath: string): Promise<hash> {
+    // TODO: pack-ref
     const objectPath = path.resolve(this.repoPath, filepath)
     const content = await fs.readFile(objectPath, {encoding: 'utf8'})
     if (!isHash(content.trim())) throw new Error('content is not hash')

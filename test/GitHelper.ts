@@ -39,7 +39,7 @@ export default class GitRepo {
   }
 }
 
-async function exec(cmd: string, options?: cp.ExecOptions): Promise<string> {
+export async function exec(cmd: string, options?: cp.ExecOptions): Promise<string> {
   const result = await cp.exec(cmd, options)
   if (result['1']) throw new Error(result['1'].toString())
   return result['0'].toString()
