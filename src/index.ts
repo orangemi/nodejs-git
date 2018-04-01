@@ -42,7 +42,6 @@ export class Repo {
   }
 
   async diffTree (hash1: hash, hash2: hash, options = {recursive: true, prefix: ''}) {
-    // console.log('diffTree', {hash1, hash2})
     const prefix = options.prefix || ''
     let result: Array<DiffResult> = []
     let nodes1: Array<TreeNode> = []
@@ -56,8 +55,6 @@ export class Repo {
       nodes2 = nodes2.concat(tree.nodes)
     }
 
-    // console.log('---', nodes1, nodes2)
-  
     await Promise.all(nodes1.map(async (node1) => {
       const node2 = findAndPop(node1, nodes2)
       const diff = <DiffResult>{
@@ -67,7 +64,6 @@ export class Repo {
         rightMode: node2 ? node2.mode : 0,
         rightHash: node2 ? node2.hash : ''
       }
-      // if (!diff.right) diff.right = <TreeNode>{mode: 0, hash: '', name: ''}
       if (diff.leftHash === diff.rightHash) return // ignore same hash
   
       result.push(diff)
@@ -142,7 +138,6 @@ export class Repo {
   }
 
   async loadTree (hash: hash, options: LoadOptions = {}) {
-    // console.log('loadTree', hash)
     if (!isHash(hash)) throw new Error(hash + ' is not hash')
     const loadResult = await this.loadObject(hash)
     if (loadResult.type !== 'tree') throw new Error(hash + ' is not tree')
@@ -210,12 +205,51 @@ export class Repo {
   }
 
   async loadFileHash (filepath: string): Promise<hash> {
-    // TODO: pack-ref
     const objectPath = path.resolve(this.repoPath, filepath)
-    const content = await fs.readFile(objectPath, {encoding: 'utf8'})
+    const canAccessRef = await canAccess(objectPath)
+    let content
+    if (canAccessRef) {
+      content = await fs.readFile(objectPath, {encoding: 'utf8'})
+    } else {
+      const refs = await this.listpackRef()
+      content = refs[filepath] || ''
+    }
     if (!isHash(content.trim())) throw new Error('content is not hash')
     return content.trim()
   }
+
+  async listpackRef (): Promise<Map<string, hash>> {
+    const result = <Map<string, hash>>{}
+    const packfilePath = path.resolve(this.repoPath, 'packed-refs')
+    const content = await fs.readFile(packfilePath, {encoding: 'utf-8'})
+    content.split('\n').forEach(line => {
+      const hash = line.slice(0, 40).toString()
+      const ref = line.slice(41).toString()
+      if (!isHash(hash)) return
+      result[ref] = hash
+    })
+    return result
+  }
+  
+  // async loadPackRefHash (ref: string): Promise<string> {
+  //   const packfilePath = path.resolve(this.repoPath, 'packed-refs')
+  //   const packfileStream = fs.createReadStream(packfilePath)
+  //   const lfBuffer = Buffer.from([LF])
+  //   while (true) {
+  //     const line = await readUntil(packfileStream, lfBuffer, {ignoreEndError: true})
+  //     if (!line || !line.length) {
+  //       packfileStream.destroy()
+  //       return ''
+  //     }
+  //     const hash = line.slice(0, 40).toString()
+  //     const localRef = line.slice(41).toString()
+  //     if (!isHash(hash)) continue
+  //     if (localRef === ref) {
+  //       packfileStream.destroy()
+  //       return hash
+  //     }
+  //   }
+  // }
 
   async listPack () {
     const packDirPath = path.resolve(this.repoPath, 'objects', 'pack')
@@ -349,5 +383,14 @@ export class Repo {
       await new Promise(resolve => result.stream.on('end', resolve))
     }
     return result
+  }
+}
+
+async function canAccess(filepath) {
+  try {
+    await fs.access(filepath)
+    return true
+  } catch (e) {
+    return false
   }
 }
