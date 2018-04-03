@@ -1,12 +1,19 @@
 import * as stream from 'stream'
 
+export interface streamReadOptions {
+  limit?: number,
+  skip?: number,
+  ignoreEndError?: boolean,
+}
+
 export function readUntil (
   source: stream.Readable,
-  delimiter: Buffer,
-  options = {limit: 0, skip: 0}): Promise<Buffer> {
+  delimiter: Buffer | string,
+  options: streamReadOptions = {}): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const limit = options.limit || 0
     const skip = options.skip || 0
+    const ignoreEndError = options.ignoreEndError || false
     let read = 0
     let buffer = Buffer.alloc(0)
   
@@ -42,6 +49,7 @@ export function readUntil (
     }
   
     function onEnd () {
+      if (ignoreEndError) return done(null)
       done(new Error('Stream did not contain pattern'))
     }
   

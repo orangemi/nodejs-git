@@ -1,5 +1,5 @@
 import * as assert from 'assert'
-import GitRepo from './GitHelper'
+import GitRepo, { exec } from './GitHelper'
 import {Repo} from '../src/'
 describe('name', () => {
   let repopath = '/tmp/demo-repo'
@@ -24,4 +24,15 @@ describe('name', () => {
     const commitHash = logs.match(/^commit ([a-f0-9]{40})/)[1]
     assert.strictEqual(commitHash, commit.hash)
   })
+
+  it('load commit ok after gc', async () => {
+    await gitRepo.addFile('a.1')
+    await gitRepo.commit('commit')
+    await exec('git gc', {cwd: gitRepo.repo})
+    const commit = await repo.loadHead({loadAll: true})
+    const logs = (await gitRepo.logs({limit: 1}))
+    const commitHash = logs.match(/^commit ([a-f0-9]{40})/)[1]
+    assert.strictEqual(commitHash, commit.hash)
+  })
+
 })
