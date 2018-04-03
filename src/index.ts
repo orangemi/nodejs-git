@@ -270,9 +270,7 @@ export class Repo {
     const hashBuffer = Buffer.from(hash, 'hex')
     const hashFanIdx = hashBuffer.readUIntBE(0, 1)
     const idxFilepath = path.resolve(this.repoPath, 'objects', 'pack', `pack-${packHash}.idx`)
-    // const contentStream = zlib.createInflate()
     const idxStream = fs.createReadStream(idxFilepath)
-    const idxBuffer = await fs.readFile(idxFilepath)
 
     // buffer mode
     let offset = 0
