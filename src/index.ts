@@ -4,7 +4,21 @@ import * as fs from 'mz/fs'
 import { hash, LoadOptions, LoadResult, DiffResult, TreeNode, TreeResult, CommitResult, Author } from './ref'
 import { PassThrough, Transform, Readable } from 'stream'
 import { readUntil, readLimit, readSkip } from './streamUtil'
-import { getPackTypeByBit, bufferGetAscii, bufferGetOct, bufferGetDecimal, isHash, parseAuthor, listDeepFileList, findAndPop, parseVInt, parseVInt2, mergeDeltaResult } from './helper'
+import {
+  getPackTypeByBit,
+  bufferGetAscii,
+  bufferGetOct,
+  bufferGetDecimal,
+  isHash,
+  parseAuthor,
+  listDeepFileList,
+  findAndPop,
+  parseVInt,
+  parseVInt2,
+  mergeDeltaResult,
+  canAccess,
+  mkdirp,
+} from './helper'
 
 const NIL = 0x00
 const LF = 0x0a
@@ -22,6 +36,21 @@ export class Repo {
   repoPath: string
   constructor (repoPath: string) {
     this.repoPath = repoPath
+  }
+
+  async init () {
+    await mkdirp(this.repoPath + '/objects/info')
+    await mkdirp(this.repoPath + '/objects/pack')
+    await mkdirp(this.repoPath + '/refs/heads')
+    await mkdirp(this.repoPath + '/refs/tags')
+    await mkdirp(this.repoPath + '/refs/remotes')
+    await mkdirp(this.repoPath + '/hooks')
+    await mkdirp(this.repoPath + '/branches')
+    await fs.writeFile(this.repoPath + '/HEAD', 'ref: refs/heads/master\n')
+    await fs.writeFile(this.repoPath + '/config', '[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n\tignorecase = true\n\tprecomposeunicode = true\n')
+    await fs.writeFile(this.repoPath + '/description', 'Unnamed repository; edit this file \'description\' to name the repository.\n')
+    await mkdirp(this.repoPath + '/info')
+    await fs.writeFile(this.repoPath + '/info/exclude', '# git ls-files --others --exclude-from=.git/info/exclude\n')
   }
 
   async listBranches () {
@@ -231,26 +260,6 @@ export class Repo {
     return result
   }
   
-  // async loadPackRefHash (ref: string): Promise<string> {
-  //   const packfilePath = path.resolve(this.repoPath, 'packed-refs')
-  //   const packfileStream = fs.createReadStream(packfilePath)
-  //   const lfBuffer = Buffer.from([LF])
-  //   while (true) {
-  //     const line = await readUntil(packfileStream, lfBuffer, {ignoreEndError: true})
-  //     if (!line || !line.length) {
-  //       packfileStream.destroy()
-  //       return ''
-  //     }
-  //     const hash = line.slice(0, 40).toString()
-  //     const localRef = line.slice(41).toString()
-  //     if (!isHash(hash)) continue
-  //     if (localRef === ref) {
-  //       packfileStream.destroy()
-  //       return hash
-  //     }
-  //   }
-  // }
-
   async listPack () {
     const packDirPath = path.resolve(this.repoPath, 'objects', 'pack')
     const files = await fs.readdir(packDirPath)
@@ -345,7 +354,7 @@ export class Repo {
 
   async findObjectInObject (hash: hash) {
     const objectPath = path.resolve(this.repoPath, 'objects', hash.substring(0, 2), hash.substring(2))
-    try { await fs.access(objectPath) } catch (e) { return null }
+    if (!await canAccess(objectPath)) return null
     const fileStream = fs.createReadStream(objectPath)
     const contentStream = fileStream.pipe(zlib.createInflate())
     let chunk = await readUntil(contentStream, Buffer.alloc(1, NIL))
@@ -381,14 +390,5 @@ export class Repo {
       await new Promise(resolve => result.stream.on('end', resolve))
     }
     return result
-  }
-}
-
-async function canAccess(filepath) {
-  try {
-    await fs.access(filepath)
-    return true
-  } catch (e) {
-    return false
   }
 }

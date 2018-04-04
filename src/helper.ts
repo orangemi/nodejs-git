@@ -60,6 +60,26 @@ export function parseAuthor (string: string) {
   return result
 }
 
+export async function canAccess(filepath) {
+  try {
+    await fs.access(filepath)
+    return true
+  } catch (e) {
+    return false
+  }
+}
+
+export async function mkdirp (filepath: string) {
+  filepath = path.resolve(filepath)
+  const parentPath = path.resolve(filepath, '../')
+  
+  if (await canAccess(filepath)) return
+  if (!await canAccess(parentPath)) {
+    await mkdirp(parentPath)
+  }
+  await fs.mkdir(filepath)
+}
+
 export async function listDeepFileList (root: string, prefix: string): Promise<Array<string>> {
   const files = await fs.readdir(path.resolve(root, prefix))
   files.filter(file => /^\./.test(file))
