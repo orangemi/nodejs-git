@@ -35,9 +35,9 @@ export function bufferGetOct (buffer: Buffer, start, end: number) {
   return number
 }
 
-export function bufferGetDecimal (buffer: Buffer, start, end: number) {
+export function bufferGetDecimal (buffer: Buffer) {
   let number = 0
-  for (let i = start; i < end; i++) {
+  for (let i = 0; i < buffer.length; i++) {
     number = number * 10 + buffer[i] - 0x30
   }
   return number

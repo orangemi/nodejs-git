@@ -32,6 +32,11 @@ const REF_REGEX = /^ref: *(.*)/
 const PACK_IDX_2_FANOUT0 = 0xff744f63
 
 export * from './ref'
+
+export interface Repo {
+
+}
+
 export class Repo {
   repoPath: string
   constructor (repoPath: string) {
@@ -363,7 +368,7 @@ export class Repo {
     const type = bufferGetAscii(chunk, 0, spaceIndex)
 
     const nilIndex = chunk.indexOf(NIL, spaceIndex)
-    const length = bufferGetDecimal(chunk, spaceIndex + 1, nilIndex)
+    const length = bufferGetDecimal(chunk.slice(spaceIndex + 1))
 
     return <LoadResult>{
       type: type,
