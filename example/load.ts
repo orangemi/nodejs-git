@@ -21,6 +21,7 @@ async function main () {
   const blob = await repo.loadBlob(fileInfo.hash, {loadAll: true})
   console.log('------------')
   console.log('package.json')
+  console.log('size: ', blob.length)
   console.log(blob.buffer.toString())
   
   const branches = await repo.listBranches()

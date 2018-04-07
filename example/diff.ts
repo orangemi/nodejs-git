@@ -1,6 +1,6 @@
 import * as path from 'path'
 import {Repo, CommitResult} from '../src'
-import * as diff from 'diff'
+// import * as diff from 'diff'
 import * as colors from 'colors/safe'
 
 const repo = new Repo('./fixtures/repo')
