@@ -83,7 +83,7 @@ export async function mkdirp (filepath: string) {
 export async function listDeepFileList (root: string, prefix: string): Promise<Array<string>> {
   const files = await fs.readdir(path.resolve(root, prefix))
   files.filter(file => /^\./.test(file))
-  const limiter = limitFactory(5)
+  const limiter = limitFactory<Array<string>>(5)
   const refss: Array<Array<string>> = await Promise.all(files.map(file => limiter(async () => {
     file = prefix + '/' + file
     const fsStat = await fs.stat(path.resolve(root, file))
