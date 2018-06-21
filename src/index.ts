@@ -219,6 +219,7 @@ export class Repo {
 
   async loadHead (options?: LoadOptions) {
     const ref = await this.loadRef('HEAD')
+    if (isHash(ref)) return this.loadCommit(ref, options)
     const hash = await this.loadFileHash(ref)
     return this.loadCommit(hash, options)
   }
@@ -226,6 +227,7 @@ export class Repo {
   async loadRef (filepath: string): Promise<hash> {
     const objectPath = path.resolve(this.repoPath, filepath)
     const content = await fs.readFile(objectPath, {encoding: 'utf8'})
+    if (isHash(content.trim())) return content.trim()
     const ref = REF_REGEX.exec(content)[1]
     return ref.trim()
   }
@@ -301,7 +303,13 @@ export class Repo {
     const fanoutEnd = headBuffer.readUIntBE(hashFanIdx * 4, 4)
 
     skip = fanoutStart * 20
-    let tmpBuffer = await readUntil(idxStream, hashBuffer, {limit: 0, skip: skip})
+    let tmpBuffer: Buffer
+    try {
+      tmpBuffer = await readUntil(idxStream, hashBuffer, {limit: 0, skip: skip})
+    } catch (e) {
+      return null
+    }
+    if (!tmpBuffer.length) return null
     const idx = fanoutStart + tmpBuffer.length / 20
     if (idx < 0) {
       idxStream.destroy()
